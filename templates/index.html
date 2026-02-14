@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TypeKeep</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ─── Top Bar ─────────────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="logo-icon">&#9000;</span>
+      <span class="logo-text">TypeKeep</span>
+    </div>
+
+    <div class="search-wrap">
+      <svg class="search-svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+      <input type="text" id="search-input"
+             placeholder="Search your typing history…"
+             autocomplete="off" spellcheck="false">
+    </div>
+
+    <div class="topbar-right">
+      <button id="status-btn" class="status-btn recording" onclick="toggleRecording()">
+        <span class="status-dot"></span>
+        <span class="status-label">Recording</span>
+      </button>
+      <button class="icon-btn" id="settings-btn" title="Settings"
+              onclick="openSettings()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             width="20" height="20">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0
+                   0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33
+                   1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65
+                   1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2
+                   2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15
+                   1.65 1.65 0 0 0 3.17 14H3a2 2 0 0 1 0-4h.09A1.65
+                   1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2
+                   2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68
+                   1.65 1.65 0 0 0 10 3.17V3a2 2 0 0 1 4 0v.09a1.65
+                   1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2
+                   2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9
+                   1.65 1.65 0 0 0 20.83 10H21a2 2 0 0 1 0 4h-.09a1.65
+                   1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ─── Stats Bar ───────────────────────────────────────────── -->
+  <section class="stats-bar">
+    <div class="stat-card">
+      <span class="stat-value" id="stat-keys">—</span>
+      <span class="stat-label">Keystrokes (24 h)</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value" id="stat-messages">—</span>
+      <span class="stat-label">Messages</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value" id="stat-clicks">—</span>
+      <span class="stat-label">Mouse Clicks</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value" id="stat-dbsize">—</span>
+      <span class="stat-label">DB Size</span>
+    </div>
+  </section>
+
+  <!-- ─── Filters ─────────────────────────────────────────────── -->
+  <section class="filter-bar">
+    <select id="f-time">
+      <option value="1h">Last 1 hour</option>
+      <option value="3h">Last 3 hours</option>
+      <option value="6h">Last 6 hours</option>
+      <option value="12h">Last 12 hours</option>
+      <option value="24h" selected>Last 24 hours</option>
+      <option value="3d">Last 3 days</option>
+      <option value="7d">Last 7 days</option>
+      <option value="all">All time</option>
+    </select>
+
+    <select id="f-gap">
+      <option value="1">1 s gap</option>
+      <option value="2">2 s gap</option>
+      <option value="3">3 s gap</option>
+      <option value="5" selected>5 s gap</option>
+      <option value="10">10 s gap</option>
+      <option value="30">30 s gap</option>
+      <option value="60">1 min gap</option>
+      <option value="300">5 min gap</option>
+    </select>
+
+    <select id="f-app">
+      <option value="">All Apps</option>
+    </select>
+
+    <select id="f-sort">
+      <option value="newest" selected>Newest first</option>
+      <option value="oldest">Oldest first</option>
+    </select>
+
+    <label class="toggle-wrap">
+      <input type="checkbox" id="f-raw">
+      <span class="toggle-text">Raw keys</span>
+    </label>
+  </section>
+
+  <!-- ─── Messages ────────────────────────────────────────────── -->
+  <main id="messages" class="messages"></main>
+
+  <div id="load-more-wrap" class="load-more-wrap" style="display:none">
+    <button id="load-more-btn" class="btn-accent" onclick="loadMore()">Load More</button>
+  </div>
+
+  <div id="empty-state" class="empty-state" style="display:none">
+    <div class="empty-icon">&#128221;</div>
+    <h3>No messages found</h3>
+    <p>Start typing anywhere — your keystrokes will appear here.</p>
+  </div>
+
+  <div id="loading" class="loading-indicator" style="display:none">
+    <div class="spinner"></div>
+  </div>
+</div>
+
+<!-- ─── Settings Modal ─────────────────────────────────────────── -->
+<div id="settings-modal" class="modal-overlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Settings</h2>
+      <button class="icon-btn close-btn" onclick="closeSettings()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label for="s-retention">Retention period (days)</label>
+        <input type="number" id="s-retention" min="1" max="365" value="7">
+      </div>
+      <div class="field">
+        <label for="s-gap">Default session gap (seconds)</label>
+        <input type="number" id="s-gap" min="1" max="600" value="5">
+      </div>
+      <div class="field">
+        <label for="s-minlen">Minimum message length (chars)</label>
+        <input type="number" id="s-minlen" min="0" max="1000" value="1">
+      </div>
+      <div class="field-check">
+        <input type="checkbox" id="s-mouse" checked>
+        <label for="s-mouse">Record mouse clicks</label>
+      </div>
+      <div class="field-check">
+        <input type="checkbox" id="s-scroll">
+        <label for="s-scroll">Record mouse scroll</label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeSettings()">Cancel</button>
+      <button class="btn-accent" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Toast ──────────────────────────────────────────────────── -->
+<div id="toast" class="toast"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
