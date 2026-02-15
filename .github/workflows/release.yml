@@ -17,23 +17,30 @@ on:
 permissions:
   contents: write
 
+# ────────────────────────────────────────────────────────────────
+#  Each job builds BOTH TypeKeep + Companion for one OS,
+#  bundles them with the install script into a single archive.
+# ────────────────────────────────────────────────────────────────
+
 jobs:
+  # ── Windows ──────────────────────────────────────────────────
   build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
+      # ── TypeKeep (Python / PyInstaller) ──
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: |
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build executable
+      - name: Build TypeKeep executable
         run: |
           pyinstaller --onefile --noconsole --name TypeKeep `
             --add-data "templates;templates" `
@@ -41,180 +48,207 @@ jobs:
             --add-data "mobile;mobile" `
             typekeep.py
 
-      - name: Rename artifact
-        run: Move-Item dist/TypeKeep.exe dist/TypeKeep-windows.exe
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: TypeKeep-windows
-          path: dist/TypeKeep-windows.exe
-
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: Build executable
-        run: |
-          pyinstaller --onefile --noconsole --name TypeKeep \
-            --add-data "templates:templates" \
-            --add-data "static:static" \
-            --add-data "mobile:mobile" \
-            typekeep.py
-
-      - name: Rename artifact
-        run: mv dist/TypeKeep dist/TypeKeep-macos
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: TypeKeep-macos
-          path: dist/TypeKeep-macos
-
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: Build executable
-        run: |
-          pyinstaller --onefile --noconsole --name TypeKeep \
-            --add-data "templates:templates" \
-            --add-data "static:static" \
-            --add-data "mobile:mobile" \
-            typekeep.py
-
-      - name: Rename artifact
-        run: mv dist/TypeKeep dist/TypeKeep-linux
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: TypeKeep-linux
-          path: dist/TypeKeep-linux
-
-  build-companion-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
+      # ── Companion (Electron) ──
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install companion dependencies
+      - name: Install Companion dependencies
         working-directory: mobile-app
         run: npm install
 
-      - name: Copy mobile web files
+      - name: Copy mobile web files into Companion
         run: |
           if (!(Test-Path "mobile-app/app")) { New-Item -ItemType Directory -Path "mobile-app/app" -Force }
           Copy-Item -Path "mobile/*" -Destination "mobile-app/app/" -Recurse -Force
 
-      - name: Build companion app
+      - name: Build Companion executable
         working-directory: mobile-app
         run: npx electron-builder --win portable
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload companion artifact
+      # ── Bundle both + installer into one zip ──
+      - name: Create unified bundle
+        run: |
+          New-Item -ItemType Directory -Path bundle -Force
+
+          # TypeKeep main
+          Copy-Item dist/TypeKeep.exe bundle/TypeKeep.exe
+
+          # Companion portable exe (find the generated file)
+          $companion = Get-ChildItem mobile-app/dist/*.exe | Select-Object -First 1
+          Copy-Item $companion.FullName bundle/TypeKeep-Companion.exe
+
+          # Setup script
+          Copy-Item installers/setup-windows.bat bundle/setup-windows.bat
+
+          # Zip it
+          Compress-Archive -Path bundle/* -DestinationPath TypeKeep-windows.zip
+
+      - name: Upload unified bundle
         uses: actions/upload-artifact@v4
         with:
-          name: TypeKeep-Companion-windows
-          path: mobile-app/dist/*.exe
+          name: TypeKeep-windows
+          path: TypeKeep-windows.zip
 
-  build-companion-macos:
+  # ── macOS ────────────────────────────────────────────────────
+  build-macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
+      # ── TypeKeep (Python / PyInstaller) ──
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build TypeKeep executable
+        run: |
+          pyinstaller --onefile --noconsole --name TypeKeep \
+            --add-data "templates:templates" \
+            --add-data "static:static" \
+            --add-data "mobile:mobile" \
+            typekeep.py
+
+      # ── Companion (Electron) ──
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install companion dependencies
+      - name: Install Companion dependencies
         working-directory: mobile-app
         run: npm install
 
-      - name: Copy mobile web files
+      - name: Copy mobile web files into Companion
         run: |
           mkdir -p mobile-app/app
           cp -r mobile/* mobile-app/app/
 
-      - name: Build companion app
+      - name: Build Companion app
         working-directory: mobile-app
         run: npx electron-builder --mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload companion artifact
+      # ── Bundle both + installer into one archive ──
+      - name: Create unified bundle
+        run: |
+          mkdir -p bundle
+
+          # TypeKeep main
+          cp dist/TypeKeep bundle/TypeKeep
+          chmod +x bundle/TypeKeep
+
+          # Companion DMG (or .app)
+          DMG=$(find mobile-app/dist -name "*.dmg" | head -1)
+          if [ -n "$DMG" ]; then
+            cp "$DMG" "bundle/TypeKeep Companion.dmg"
+          fi
+
+          # Install script
+          cp installers/install-macos.sh bundle/install-macos.sh
+          chmod +x bundle/install-macos.sh
+
+          # Archive
+          tar -czf TypeKeep-macos.tar.gz -C bundle .
+
+      - name: Upload unified bundle
         uses: actions/upload-artifact@v4
         with:
-          name: TypeKeep-Companion-macos
-          path: mobile-app/dist/*.dmg
+          name: TypeKeep-macos
+          path: TypeKeep-macos.tar.gz
 
-  build-companion-linux:
+  # ── Linux ────────────────────────────────────────────────────
+  build-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # ── TypeKeep (Python / PyInstaller) ──
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build TypeKeep executable
+        run: |
+          pyinstaller --onefile --noconsole --name TypeKeep \
+            --add-data "templates:templates" \
+            --add-data "static:static" \
+            --add-data "mobile:mobile" \
+            typekeep.py
+
+      # ── Companion (Electron) ──
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install companion dependencies
+      - name: Install Companion dependencies
         working-directory: mobile-app
         run: npm install
 
-      - name: Copy mobile web files
+      - name: Copy mobile web files into Companion
         run: |
           mkdir -p mobile-app/app
           cp -r mobile/* mobile-app/app/
 
-      - name: Build companion app
+      - name: Build Companion app
         working-directory: mobile-app
         run: npx electron-builder --linux
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload companion artifact
+      # ── Bundle both + installer into one archive ──
+      - name: Create unified bundle
+        run: |
+          mkdir -p bundle
+
+          # TypeKeep main
+          cp dist/TypeKeep bundle/TypeKeep
+          chmod +x bundle/TypeKeep
+
+          # Companion AppImage
+          APPIMAGE=$(find mobile-app/dist -name "*.AppImage" | head -1)
+          if [ -n "$APPIMAGE" ]; then
+            APPIMAGE_NAME=$(basename "$APPIMAGE")
+            cp "$APPIMAGE" "bundle/$APPIMAGE_NAME"
+            chmod +x "bundle/$APPIMAGE_NAME"
+          fi
+
+          # Install script
+          cp installers/install-linux.sh bundle/install-linux.sh
+          chmod +x bundle/install-linux.sh
+
+          # Archive
+          tar -czf TypeKeep-linux.tar.gz -C bundle .
+
+      - name: Upload unified bundle
         uses: actions/upload-artifact@v4
         with:
-          name: TypeKeep-Companion-linux
-          path: mobile-app/dist/*.AppImage
+          name: TypeKeep-linux
+          path: TypeKeep-linux.tar.gz
 
+  # ── Release ──────────────────────────────────────────────────
   release:
     needs:
       - build-windows
       - build-macos
       - build-linux
-      - build-companion-windows
-      - build-companion-macos
-      - build-companion-linux
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -253,12 +287,27 @@ jobs:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: TypeKeep ${{ steps.tag.outputs.tag }}
           generate_release_notes: true
+          body: |
+            ## Download & Install
+
+            Each download includes **both TypeKeep + TypeKeep Companion** bundled together with an installer that links them automatically.
+
+            | Platform | File | Instructions |
+            |----------|------|-------------|
+            | **Windows** | `TypeKeep-windows.zip` | Extract the zip → run `setup-windows.bat` |
+            | **macOS** | `TypeKeep-macos.tar.gz` | Extract → run `./install-macos.sh` |
+            | **Linux** | `TypeKeep-linux.tar.gz` | Extract → run `./install-linux.sh` |
+            | **Mobile** | [Web App](https://leothefleo49.github.io/TypeKeep/) | Open in browser → install as PWA |
+
+            The installer will:
+            - Install both TypeKeep and TypeKeep Companion
+            - Link them together automatically (shared config)
+            - Create desktop shortcuts / app launchers
+            - Set up auto-start on login
+            - Create an uninstaller
           files: |
-            artifacts/TypeKeep-windows/TypeKeep-windows.exe
-            artifacts/TypeKeep-macos/TypeKeep-macos
-            artifacts/TypeKeep-linux/TypeKeep-linux
-            artifacts/TypeKeep-Companion-windows/*
-            artifacts/TypeKeep-Companion-macos/*
-            artifacts/TypeKeep-Companion-linux/*
+            artifacts/TypeKeep-windows/TypeKeep-windows.zip
+            artifacts/TypeKeep-macos/TypeKeep-macos.tar.gz
+            artifacts/TypeKeep-linux/TypeKeep-linux.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

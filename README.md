@@ -20,21 +20,25 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/leothefleo49/TypeKeep/releases/latest">
+  <a href="https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-windows.zip">
     <img src="https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows Download">
   </a>
   &nbsp;
-  <a href="https://github.com/leothefleo49/TypeKeep/releases/latest">
+  <a href="https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-macos.tar.gz">
     <img src="https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS Download">
   </a>
   &nbsp;
-  <a href="https://github.com/leothefleo49/TypeKeep/releases/latest">
+  <a href="https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-linux.tar.gz">
     <img src="https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux Download">
   </a>
   &nbsp;
   <a href="https://leothefleo49.github.io/TypeKeep/">
     <img src="https://img.shields.io/badge/Mobile-Android%20%2F%20iOS-34A853?style=for-the-badge&logo=pwa&logoColor=white" alt="Mobile App">
   </a>
+</p>
+
+<p align="center">
+  <em>Each download includes <strong>both TypeKeep + TypeKeep Companion</strong> — one installer, everything you need.</em>
 </p>
 
 ---
@@ -113,16 +117,56 @@
 
 ### One-Click Download
 
-Go to [**Releases**](https://github.com/leothefleo49/TypeKeep/releases/latest) and download the executable for your platform:
+Each download bundles **both TypeKeep + TypeKeep Companion** together with an installer that sets everything up and links the two apps automatically.
 
-| Platform | Download |
-|----------|----------|
-| Windows  | [`TypeKeep-windows.exe`](https://github.com/leothefleo49/TypeKeep/releases/latest) |
-| macOS    | [`TypeKeep-macos`](https://github.com/leothefleo49/TypeKeep/releases/latest) |
-| Linux    | [`TypeKeep-linux`](https://github.com/leothefleo49/TypeKeep/releases/latest) |
-| Android / iOS | [**Mobile Web App**](https://leothefleo49.github.io/TypeKeep/) |
+| Platform | Download | What's inside | How to install |
+|----------|----------|--------------|----------------|
+| **Windows** | [`TypeKeep-windows.zip`](https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-windows.zip) | `TypeKeep.exe` + `TypeKeep-Companion.exe` + `setup-windows.bat` | Extract the zip → double-click **`setup-windows.bat`** |
+| **macOS** | [`TypeKeep-macos.tar.gz`](https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-macos.tar.gz) | `TypeKeep` + `TypeKeep Companion.dmg` + `install-macos.sh` | Extract → run **`./install-macos.sh`** in Terminal |
+| **Linux** | [`TypeKeep-linux.tar.gz`](https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-linux.tar.gz) | `TypeKeep` + `TypeKeep-Companion.AppImage` + `install-linux.sh` | Extract → run **`./install-linux.sh`** in Terminal |
+| **Android / iOS** | [**Mobile Web App**](https://leothefleo49.github.io/TypeKeep/) | Progressive Web App | Open link → "Add to Home Screen" |
 
-### Quick Start (Python)
+> **The installer will automatically:**
+> - Install both TypeKeep and TypeKeep Companion to the right location
+> - Link the two apps together (shared config)
+> - Create desktop shortcuts and app launchers
+> - Set up auto-start on login
+> - Create an uninstaller for clean removal
+
+### Windows
+
+```
+1. Download TypeKeep-windows.zip
+2. Extract the zip to any folder
+3. Double-click setup-windows.bat
+4. Done — shortcuts on Desktop & Start Menu, auto-starts on login
+```
+
+### macOS
+
+```bash
+# Download and extract
+tar -xzf TypeKeep-macos.tar.gz
+cd TypeKeep-macos
+
+# Run the installer
+chmod +x install-macos.sh
+./install-macos.sh
+```
+
+### Linux
+
+```bash
+# Download and extract
+tar -xzf TypeKeep-linux.tar.gz
+cd TypeKeep-linux
+
+# Run the installer
+chmod +x install-linux.sh
+./install-linux.sh
+```
+
+### Quick Start (Python — from source)
 
 ```bash
 # Clone the repository
@@ -134,16 +178,6 @@ pip install -r requirements.txt
 
 # Run TypeKeep
 python typekeep.py
-```
-
-### Windows Installer
-
-```batch
-# Double-click install.bat to install dependencies
-install.bat
-
-# Double-click start.bat to run in the background
-start.bat
 ```
 
 ---
@@ -309,8 +343,10 @@ TypeKeep/
 ├── tray.py               # System tray icon
 ├── supabase_setup.sql    # Database setup for Supabase
 ├── requirements.txt      # Python dependencies
-├── install.bat           # Windows dependency installer
-├── start.bat             # Windows background launcher
+├── installers/
+│   ├── setup-windows.bat # Windows all-in-one installer
+│   ├── install-macos.sh  # macOS all-in-one installer
+│   └── install-linux.sh  # Linux all-in-one installer
 ├── templates/
 │   └── index.html        # Dashboard SPA
 ├── static/
@@ -324,9 +360,15 @@ TypeKeep/
 │   ├── sw.js             # Service worker
 │   ├── icon-192.png      # App icon
 │   └── icon-512.png      # App icon (large)
+├── mobile-app/           # Electron companion app
+│   ├── main.js           # Electron main process
+│   ├── preload.js        # Preload script
+│   ├── package.json      # Electron build config
+│   └── app/              # Embedded mobile web files
 └── data/                 # Runtime data (gitignored)
     ├── typekeep.db       # SQLite database
     ├── config.json       # User settings
+    ├── link.json         # Auto-link config (TypeKeep ↔ Companion)
     └── clips/            # Clipboard images
 ```
 
