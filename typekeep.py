@@ -1,11 +1,9 @@
 """
-TypeKeep — lightweight local keystroke & input logger.
+TypeKeep - lightweight local input logger & macro engine.
 
-Run this file to start:
-  python typekeep.py
-
-Dashboard opens at  http://127.0.0.1:7700
-Sits quietly in the system tray; right-click tray icon for controls.
+Run:  python typekeep.py
+Dashboard opens at http://127.0.0.1:7700
+System-tray icon stays running in the background.
 """
 
 import socket
@@ -19,6 +17,7 @@ from database import Database
 from recorder import Recorder
 from server import create_app
 from tray import TrayIcon
+from clipboard_monitor import ClipboardMonitor
 
 
 def _port_in_use(port: int) -> bool:
@@ -30,34 +29,29 @@ def main():
     config = Config()
     port = config.get('server_port', 7700)
 
-    # ── Prevent duplicate instances ────────────────────────────────
     if _port_in_use(port):
-        print(f"TypeKeep is already running → opening dashboard.")
+        print("TypeKeep is already running - opening dashboard.")
         webbrowser.open(f'http://127.0.0.1:{port}')
         sys.exit(0)
 
-    # ── Core components ────────────────────────────────────────────
     db = Database()
     recorder = Recorder(db, config)
+    clipboard = ClipboardMonitor(db, config)
     app = create_app(db, recorder, config)
 
-    # ── Flask in background thread ─────────────────────────────────
-    server_thread = threading.Thread(
-        target=lambda: app.run(
-            host='127.0.0.1', port=port,
-            debug=False, use_reloader=False, threaded=True,
-        ),
-        daemon=True,
-        name='flask-server',
-    )
-    server_thread.start()
+    # Flask in background thread
+    threading.Thread(
+        target=lambda: app.run(host='127.0.0.1', port=port,
+                               debug=False, use_reloader=False, threaded=True),
+        daemon=True, name='flask-server',
+    ).start()
 
-    # ── Recorder (pynput starts its own threads) ───────────────────
     recorder.start()
+    clipboard.start()
 
-    # ── Periodic flush & cleanup ───────────────────────────────────
+    # Periodic flush & cleanup (crash-resistant: flush every 1s)
     def _periodic():
-        flush_sec = config.get('buffer_flush_seconds', 2)
+        flush_sec = config.get('buffer_flush_seconds', 1)
         cleanup_interval = config.get('cleanup_interval_seconds', 3600)
         last_cleanup = time.time()
         while True:
@@ -65,31 +59,34 @@ def main():
                 db.flush_buffer()
                 now = time.time()
                 if now - last_cleanup >= cleanup_interval:
-                    db.cleanup(config.get('retention_days', 7))
+                    db.cleanup(config.get('retention_days', 30))
+                    db.cleanup_clipboard(config.get('clipboard_retention_days', 30))
                     last_cleanup = now
             except Exception as exc:
                 print(f"[TypeKeep] periodic error: {exc}")
             time.sleep(flush_sec)
 
-    threading.Thread(target=_periodic, daemon=True, name='flush-thread').start()
+    threading.Thread(target=_periodic, daemon=True, name='flush').start()
 
-    # ── Startup banner ─────────────────────────────────────────────
     print("=" * 48)
     print("  TypeKeep is running")
-    print(f"  Dashboard → http://127.0.0.1:{port}")
-    print("  Look for the teal  T  icon in your system tray.")
+    print(f"  Dashboard -> http://127.0.0.1:{port}")
+    print("  Tray icon: teal T")
     print("=" * 48)
 
-    # ── System tray (blocks main thread) ───────────────────────────
+    # Open browser on first run
+    if config.get('show_onboarding', True):
+        webbrowser.open(f'http://127.0.0.1:{port}')
+
     tray = TrayIcon(config, recorder, port)
     try:
         tray.run()
     except KeyboardInterrupt:
         pass
 
-    # ── Clean shutdown ─────────────────────────────────────────────
-    print("\n[TypeKeep] Shutting down…")
+    print("\n[TypeKeep] Shutting down...")
     recorder.stop()
+    clipboard.stop()
     db.flush_buffer()
     db.close()
 

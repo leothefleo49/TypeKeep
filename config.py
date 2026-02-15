@@ -8,16 +8,55 @@ DATA_DIR = os.path.join(BASE_DIR, 'data')
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 
 DEFAULTS = {
-    'retention_days': 7,
-    'default_gap_seconds': 5,
-    'server_port': 7700,
-    'cleanup_interval_seconds': 3600,
-    'buffer_flush_seconds': 2,
-    'buffer_size': 100,
+    # Recording
+    'record_keyboard': True,
     'record_mouse_clicks': True,
     'record_mouse_scroll': False,
+    'record_mouse_movement': False,
+    'record_shortcuts': True,
+    'record_notifications': True,
+    'mouse_sample_ms': 500,
+
+    # Grouping
+    'default_gap_seconds': 5,
+    'same_window_gap_seconds': 30,
+    'split_on_enter': False,
+
+    # Display
     'min_message_length': 1,
     'max_messages_display': 200,
+
+    # Retention & backup
+    'retention_days': 30,
+    'server_port': 7700,
+    'cleanup_interval_seconds': 3600,
+    'buffer_flush_seconds': 1,
+    'auto_save_interval': 1,
+
+    # Startup
+    'start_on_boot': False,
+    'start_minimized': True,
+    'show_onboarding': True,
+
+    # Clipboard
+    'record_clipboard': True,
+    'clipboard_retention_days': 30,
+
+    # Sync
+    'device_id': '',
+    'device_name': '',
+    'sync_key': '',
+    'sync_enabled': False,
+    'clipboard_sync': False,
+    'paired_devices': [],           # [{ id, name, ip, port, clipboard_sync }]
+
+    # Backup (stubs)
+    'backup_enabled': False,
+    'backup_service': 'none',        # none / gdrive / onedrive
+    'backup_interval_minutes': 60,
+
+    # Theme
+    'theme': 'dark',
 }
 
 

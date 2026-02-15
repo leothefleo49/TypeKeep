@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo   TypeKeep — Installing dependencies
+echo   TypeKeep - Installing dependencies
 echo ============================================
 echo.
 
