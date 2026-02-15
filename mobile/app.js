@@ -6,6 +6,10 @@
 const REFRESH_MS = 15000;
 const STORAGE_KEY = 'typekeep_mobile';
 
+// Default Supabase instance (shared)
+const DEFAULT_SUPA_URL = 'https://tnbxhpgrtekshowzfdrg.supabase.co';
+const DEFAULT_SUPA_KEY = 'sb_publishable_JFmUlEYrgoJ0IFQUifnqMA_Gd3-Imt3';
+
 /* ── State ─────────────────────────────────────────────────── */
 const S = {
   connected: false,
@@ -89,15 +93,15 @@ function showMainScreen() {
 
 /* ── Connect ───────────────────────────────────────────────── */
 async function connectCloud() {
-  const url = document.getElementById('setup-url').value.trim().replace(/\/$/, '');
-  const key = document.getElementById('setup-key').value.trim();
   const syncKey = document.getElementById('setup-sync-key').value.trim();
   const name = document.getElementById('setup-device-name').value.trim() || 'Mobile';
+  const url = DEFAULT_SUPA_URL;
+  const key = DEFAULT_SUPA_KEY;
   const errEl = document.getElementById('setup-error');
   errEl.style.display = 'none';
 
-  if (!url || !key || !syncKey) {
-    errEl.textContent = 'All fields are required.';
+  if (!syncKey) {
+    errEl.textContent = 'Please enter a sync key.';
     errEl.style.display = 'block';
     return;
   }
@@ -280,7 +284,7 @@ function renderMessages() {
       <div class="card-text">${esc(preview)}</div>
       <div class="msg-meta">
         <span>${m.keystroke_count || 0} keys</span>
-        ${m.window ? `<span>${esc(m.window.substring(0, 40))}</span>` : ''}
+        ${m.win_title ? `<span>${esc(m.win_title.substring(0, 40))}</span>` : ''}
       </div>
       <div class="card-actions">
         <button class="card-action-btn" onclick="event.stopPropagation(); copyText(${i}, 'messages')">
@@ -431,8 +435,6 @@ function switchTab(tab) {
 
 /* ── Settings ──────────────────────────────────────────────── */
 function openSettings() {
-  document.getElementById('s-url').value = S.config.url;
-  document.getElementById('s-key').value = S.config.key;
   document.getElementById('s-sync-key').value = S.config.syncKey;
   document.getElementById('s-device-name').value = S.config.deviceName;
   document.getElementById('settings-overlay').style.display = 'flex';
@@ -443,11 +445,11 @@ function closeSettings() {
 }
 
 function saveSettings() {
-  S.config.url = document.getElementById('s-url').value.trim().replace(/\/$/, '');
-  S.config.key = document.getElementById('s-key').value.trim();
   S.config.syncKey = document.getElementById('s-sync-key').value.trim();
   S.config.deviceName = document.getElementById('s-device-name').value.trim();
-  S.connected = !!(S.config.url && S.config.key && S.config.syncKey);
+  S.config.url = DEFAULT_SUPA_URL;
+  S.config.key = DEFAULT_SUPA_KEY;
+  S.connected = !!S.config.syncKey;
   saveConfig();
   closeSettings();
   registerDevice();

@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS sync_messages (
     device_name TEXT,
     final_text TEXT,
     app TEXT,
-    window TEXT,
+    win_title TEXT,
     start_time DOUBLE PRECISION,
     end_time DOUBLE PRECISION,
     keystroke_count INTEGER DEFAULT 0,

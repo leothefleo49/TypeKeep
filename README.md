@@ -172,28 +172,18 @@ If your phone is on the same network as your desktop:
 
 ## Cloud Sync
 
-Cloud sync uses **Supabase** (free tier) to connect all your devices — desktop, Android, iOS — even across different networks.
+Cloud sync connects all your devices — desktop, Android, iOS — even across different networks. It's **free** and works out of the box with no setup required.
 
-### Setup (5 minutes, completely free)
+### Setup (1 minute)
 
-1. **Create a Supabase account** at [supabase.com](https://supabase.com) (free)
-2. **Create a new project** (any name and password)
-3. **Run the setup SQL:**
-   - Go to **SQL Editor** → **New Query**
-   - Copy the contents of [`supabase_setup.sql`](supabase_setup.sql) and run it
-4. **Get your credentials:**
-   - Go to **Settings** → **API**
-   - Copy your **Project URL** (e.g. `https://xxxxx.supabase.co`)
-   - Copy your **anon/public key** (starts with `eyJ...`)
-5. **Configure TypeKeep:**
-   - Open the TypeKeep dashboard → **Settings** → **Cloud Sync**
-   - Paste your Supabase URL and anon key
-   - Enter a **Sync Key** (shared passphrase — same on all devices)
-   - Enable cloud sync and save
-6. **Connect your phone:**
-   - Open the [mobile app](https://leothefleo49.github.io/TypeKeep/)
-   - Enter the same Supabase URL, anon key, and sync key
-   - Done! Your devices are now synced
+1. **On Desktop:** Open the TypeKeep dashboard → **Settings** → **Cloud Sync**
+   - Enter a **Sync Key** (any passphrase you choose — this is shared across your devices)
+   - Check **Enable cloud sync** → Save
+2. **On your phone:** Open the [mobile app](https://leothefleo49.github.io/TypeKeep/)
+   - Enter the **same Sync Key** and a device name
+   - Tap **Connect** — done!
+
+That's it. All your devices are now synced.
 
 ### What syncs?
 | Data | Desktop → Cloud | Cloud → Mobile | Mobile → Cloud | Cloud → Desktop |
@@ -257,10 +247,10 @@ Settings are stored in `data/config.json`. Key options:
 | `record_clipboard` | `true` | Track clipboard changes |
 | `default_gap_seconds` | `5` | Time gap to split messages |
 | `retention_days` | `30` | Auto-delete events older than N days |
-| `cloud_sync_enabled` | `false` | Enable Supabase cloud sync |
-| `supabase_url` | `""` | Supabase project URL |
-| `supabase_anon_key` | `""` | Supabase anon/public key |
+| `cloud_sync_enabled` | `false` | Enable cloud sync |
 | `cloud_sync_key` | `""` | Shared sync passphrase |
+| `supabase_url` | *(built-in)* | Supabase project URL (advanced override) |
+| `supabase_anon_key` | *(built-in)* | Supabase anon key (advanced override) |
 | `sync_enabled` | `false` | Enable LAN device sync |
 | `start_on_boot` | `false` | Run on Windows startup |
 

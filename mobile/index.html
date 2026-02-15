@@ -21,19 +21,11 @@
       <div class="setup-container">
         <div class="setup-logo">⌨</div>
         <h1>TypeKeep</h1>
-        <p class="setup-subtitle">Connect to your TypeKeep cloud sync to view your typing history and clipboard across all your devices.</p>
+        <p class="setup-subtitle">Enter the same sync key you set on your desktop TypeKeep to connect your devices.</p>
 
         <div class="setup-form">
           <div class="field">
-            <label>Supabase URL</label>
-            <input type="url" id="setup-url" placeholder="https://xxxxx.supabase.co" autocomplete="url">
-          </div>
-          <div class="field">
-            <label>Supabase Anon Key</label>
-            <input type="text" id="setup-key" placeholder="eyJhbGciOiJI..." autocomplete="off" class="mono">
-          </div>
-          <div class="field">
-            <label>Sync Key (shared passphrase)</label>
+            <label>Sync Key (same as your desktop)</label>
             <input type="text" id="setup-sync-key" placeholder="my-secret-passphrase" autocomplete="off">
           </div>
           <div class="field">
@@ -46,14 +38,14 @@
 
         <div class="setup-help">
           <details>
-            <summary>How to set up cloud sync</summary>
+            <summary>How to set up sync</summary>
             <ol>
-              <li>Create a free account at <a href="https://supabase.com" target="_blank">supabase.com</a></li>
-              <li>Create a new project (any name/password)</li>
-              <li>Go to SQL Editor → paste the TypeKeep setup SQL and run it</li>
-              <li>Go to Settings → API → copy your <strong>Project URL</strong> and <strong>anon/public key</strong></li>
-              <li>Enter them above along with a sync key (same key on all devices)</li>
-              <li>On your desktop TypeKeep, go to Settings → Cloud Sync and enter the same info</li>
+              <li>On your desktop, open TypeKeep dashboard → <strong>Settings</strong></li>
+              <li>Scroll to <strong>Cloud Sync</strong> section</li>
+              <li>Enter a <strong>Sync Key</strong> (any passphrase you choose)</li>
+              <li>Check <strong>Enable cloud sync</strong> and save</li>
+              <li>Enter the <strong>same sync key</strong> above on your phone</li>
+              <li>Done! Your devices are now connected</li>
             </ol>
           </details>
         </div>
@@ -198,14 +190,6 @@
           <button class="icon-btn" onclick="closeSettings()">✕</button>
         </div>
         <div class="settings-body">
-          <div class="field">
-            <label>Supabase URL</label>
-            <input type="url" id="s-url" class="mono">
-          </div>
-          <div class="field">
-            <label>Anon Key</label>
-            <input type="text" id="s-key" class="mono">
-          </div>
           <div class="field">
             <label>Sync Key</label>
             <input type="text" id="s-sync-key">

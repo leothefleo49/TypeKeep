@@ -363,17 +363,20 @@
         <p class="hint">Permanently delete all recorded events. This cannot be undone.</p>
       </fieldset>
       <fieldset>
-        <legend>☁️ Cloud Sync (Free — Supabase)</legend>
-        <p class="hint" style="margin-bottom:10px">Sync clipboard &amp; history across all your devices (desktop, Android, iOS). <a href="https://supabase.com" target="_blank" style="color:var(--accent)">Create free project →</a></p>
-        <div class="field"><label>Supabase URL</label><input type="url" id="s-supa-url" placeholder="https://xxxxx.supabase.co" class="mono"></div>
-        <div class="field"><label>Supabase Anon Key</label><input type="text" id="s-supa-key" placeholder="eyJhbGciOiJI..." class="mono"></div>
-        <div class="field"><label>Cloud Sync Key (shared passphrase)</label><input type="text" id="s-cloud-key" placeholder="my-sync-key"></div>
+        <legend>☁️ Cloud Sync</legend>
+        <p class="hint" style="margin-bottom:10px">Sync clipboard &amp; history across all your devices (desktop, Android, iOS). Just pick a sync key and enable it!</p>
+        <div class="field"><label>Sync Key (shared passphrase — same on all devices)</label><input type="text" id="s-cloud-key" placeholder="pick-any-passphrase"></div>
         <div class="field-check"><input type="checkbox" id="s-cloud-enabled"><label for="s-cloud-enabled">Enable cloud sync</label></div>
         <div class="field-check"><input type="checkbox" id="s-cloud-clipboard" checked><label for="s-cloud-clipboard">Sync clipboard to cloud</label></div>
         <div class="field-check"><input type="checkbox" id="s-cloud-messages" checked><label for="s-cloud-messages">Sync typing history to cloud</label></div>
         <button class="btn-ghost-sm" onclick="testCloudConnection()" style="margin-top:6px">Test Connection</button>
         <span id="cloud-test-result" style="font-size:12px;margin-left:8px"></span>
-        <p class="hint" style="margin-top:8px">📱 Mobile app: <a href="/mobile" target="_blank" style="color:var(--accent)">Open on this device</a> or visit <strong>https://leothefleo49.github.io/TypeKeep/</strong> on your phone</p>
+        <p class="hint" style="margin-top:8px">📱 <strong>Phone app:</strong> Open <a href="/mobile" target="_blank" style="color:var(--accent)">on this device</a> or <a href="https://leothefleo49.github.io/TypeKeep/" target="_blank" style="color:var(--accent)">leothefleo49.github.io/TypeKeep</a> on your phone, then enter the same sync key.</p>
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;font-size:12px;color:var(--txt-muted)">Advanced: Use your own Supabase</summary>
+          <div class="field" style="margin-top:8px"><label>Supabase URL</label><input type="url" id="s-supa-url" placeholder="https://xxxxx.supabase.co" class="mono"></div>
+          <div class="field"><label>Supabase Anon Key</label><input type="text" id="s-supa-key" placeholder="eyJhbGciOiJI..." class="mono"></div>
+        </details>
       </fieldset>
     </div>
     <div class="modal-footer">

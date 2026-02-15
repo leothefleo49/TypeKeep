@@ -56,22 +56,26 @@ class CloudSync:
     def device_name(self):
         return self.config.get('device_name', '') or ''
 
-    def _headers(self):
-        return {
+    def _headers(self, upsert=False):
+        h = {
             'apikey': self.supabase_key,
             'Authorization': f'Bearer {self.supabase_key}',
             'Content-Type': 'application/json',
-            'Prefer': 'return=representation',
         }
+        if upsert:
+            h['Prefer'] = 'resolution=merge-duplicates,return=representation'
+        else:
+            h['Prefer'] = 'return=representation'
+        return h
 
-    def _api(self, method, table, params=None, data=None):
+    def _api(self, method, table, params=None, data=None, upsert=False):
         """Make a Supabase REST API call."""
         if not _rq:
             raise RuntimeError('requests library not available')
         url = f'{self.supabase_url}/rest/v1/{table}'
         if params:
             url += '?' + '&'.join(f'{k}={v}' for k, v in params.items())
-        r = _rq.request(method, url, headers=self._headers(),
+        r = _rq.request(method, url, headers=self._headers(upsert=upsert),
                         json=data, timeout=15)
         if r.status_code >= 400:
             raise RuntimeError(f'Supabase API error {r.status_code}: {r.text[:200]}')
@@ -106,7 +110,7 @@ class CloudSync:
             # Upsert sync group
             self._api('POST', 'sync_groups', data={
                 'sync_key': self.sync_key,
-            }, params={'on_conflict': 'sync_key'})
+            }, params={'on_conflict': 'sync_key'}, upsert=True)
         except Exception:
             pass  # Group may already exist
 
@@ -114,6 +118,7 @@ class CloudSync:
             # Upsert this device
             self._api('POST', 'sync_devices',
                       params={'on_conflict': 'id'},
+                      upsert=True,
                       data={
                           'id': self.device_id,
                           'sync_key': self.sync_key,
@@ -221,7 +226,7 @@ class CloudSync:
                 'device_name': self.device_name,
                 'final_text': (m['final_text'] or '')[:5000],
                 'app': m.get('app', ''),
-                'window': (m.get('window') or '')[:200],
+                'win_title': (m.get('window') or '')[:200],
                 'start_time': m['start_time'],
                 'end_time': m['end_time'],
                 'keystroke_count': m.get('keystroke_count', 0),

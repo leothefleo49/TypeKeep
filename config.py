@@ -57,8 +57,8 @@ DEFAULTS = {
 
     # Cloud Sync (Supabase)
     'cloud_sync_enabled': False,
-    'supabase_url': '',
-    'supabase_anon_key': '',
+    'supabase_url': 'https://tnbxhpgrtekshowzfdrg.supabase.co',
+    'supabase_anon_key': 'sb_publishable_JFmUlEYrgoJ0IFQUifnqMA_Gd3-Imt3',
     'cloud_sync_key': '',
     'cloud_sync_clipboard': True,
     'cloud_sync_messages': True,
