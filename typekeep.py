@@ -9,11 +9,15 @@ Flags:
   --background   Run in background only (no browser, no tray UI)
 """
 
+import os
 import socket
 import sys
 import threading
 import time
 import webbrowser
+
+# Ensure sibling modules are always importable regardless of how the script is launched
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import Config
 from database import Database
