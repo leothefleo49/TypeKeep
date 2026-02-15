@@ -118,6 +118,9 @@ async function loadMessages(append = false) {
     const p = new URLSearchParams({
       gap: S.filters.gap, range: S.filters.time, sort: S.filters.sort,
       limit: PAGE_SIZE, offset: append ? S.offset : 0, min_length: 1,
+      split_enter: S.filters.split_enter || 'true',
+      context_aware: S.filters.context_aware || 'true',
+      smart_enter: S.filters.smart_enter || 'true',
     });
     if (S.filters.app)    p.set('app', S.filters.app);
     if (S.filters.search) p.set('search', S.filters.search);
@@ -553,10 +556,14 @@ function openSettings() {
   el('s-gap').value           = s.default_gap_seconds ?? 5;
   el('s-swgap').value         = s.same_window_gap_seconds ?? 30;
   el('s-minlen').value        = s.min_message_length ?? 1;
-  el('s-split-enter').checked = s.split_on_enter ?? false;
+  el('s-context-aware').checked = s.context_aware_grouping ?? true;
+  el('s-split-enter').checked = s.split_on_enter ?? true;
+  el('s-smart-enter').checked = s.smart_enter ?? true;
   el('s-retention').value     = s.retention_days ?? 30;
   el('s-flush').value         = s.buffer_flush_seconds ?? 1;
-  el('s-boot').checked        = s.start_on_boot ?? false;
+  el('s-boot').checked        = s.start_on_boot ?? true;
+  el('s-bg-boot').checked     = s.start_background_on_boot ?? true;
+  el('s-ui-boot').checked     = s.start_ui_on_boot ?? false;
   // Cloud sync
   el('s-supa-url').value      = s.supabase_url ?? '';
   el('s-supa-key').value      = s.supabase_anon_key ?? '';
@@ -582,10 +589,14 @@ async function saveSettings() {
     default_gap_seconds:   +el('s-gap').value,
     same_window_gap_seconds: +el('s-swgap').value,
     min_message_length:    +el('s-minlen').value,
+    context_aware_grouping: el('s-context-aware').checked,
     split_on_enter:        el('s-split-enter').checked,
+    smart_enter:           el('s-smart-enter').checked,
     retention_days:        +el('s-retention').value,
     buffer_flush_seconds:  +el('s-flush').value,
     start_on_boot:         el('s-boot').checked,
+    start_background_on_boot: el('s-bg-boot').checked,
+    start_ui_on_boot:      el('s-ui-boot').checked,
     // Cloud sync
     supabase_url:          el('s-supa-url').value.trim().replace(/\/$/, ''),
     supabase_anon_key:     el('s-supa-key').value.trim(),
@@ -600,8 +611,15 @@ async function saveSettings() {
       body: JSON.stringify(data),
     });
     S.settings = r.settings || { ...S.settings, ...data };
+    // Update filter state from settings
+    S.filters.split_enter = data.split_on_enter ? 'true' : 'false';
+    S.filters.context_aware = data.context_aware_grouping ? 'true' : 'false';
+    S.filters.smart_enter = data.smart_enter ? 'true' : 'false';
+    updateFilterButtons();
     toast('Settings saved');
     closeSettings();
+    S._forceRender = true;
+    loadMessages();
   } catch (_) { toast('Failed to save settings'); }
 }
 
@@ -1040,6 +1058,30 @@ async function pullFromDevice(id) {
 }
 
 /* ══════════════════════════════════════════════════════════════
+   FILTER TOGGLES (context-aware, split-enter)
+   ══════════════════════════════════════════════════════════════ */
+function toggleFilterSplitEnter() {
+  S.filters.split_enter = S.filters.split_enter === 'true' ? 'false' : 'true';
+  updateFilterButtons();
+  saveFilters();
+  S.offset = 0; S._forceRender = true; loadMessages();
+}
+
+function toggleFilterContextAware() {
+  S.filters.context_aware = S.filters.context_aware === 'true' ? 'false' : 'true';
+  updateFilterButtons();
+  saveFilters();
+  S.offset = 0; S._forceRender = true; loadMessages();
+}
+
+function updateFilterButtons() {
+  const se = el('filter-split-enter');
+  const ca = el('filter-context-aware');
+  if (se) se.classList.toggle('active', S.filters.split_enter === 'true');
+  if (ca) ca.classList.toggle('active', S.filters.context_aware === 'true');
+}
+
+/* ══════════════════════════════════════════════════════════════
    EVENT WIRING
    ══════════════════════════════════════════════════════════════ */
 function wireEvents() {
@@ -1100,13 +1142,64 @@ function wireEvents() {
   el('search-input').value = S.filters.search;
 }
 
-/* ── Auto-refresh (no flicker) ─────────────────────────────── */
-function startRefresh() {
-  _refreshTimer = setInterval(() => {
+/* ── Auto-refresh (SSE primary, polling fallback) ───────────── */
+function startSSE() {
+  if (_eventSource) { try { _eventSource.close(); } catch(_) {} }
+  _eventSource = new EventSource('/api/events-stream');
+
+  _eventSource.addEventListener('connected', () => {
+    console.log('[TypeKeep] SSE connected');
+  });
+
+  _eventSource.addEventListener('update', () => {
     if (document.hidden) return;
     loadMessages();
     loadStats();
+    if (S.activeTab === 'clipboard') loadClipboard();
+  });
+
+  _eventSource.addEventListener('clipboard_copied', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      const typeLabel = data.type === 'text' ? '📋' : data.type === 'image' ? '🖼️' : '📁';
+      toast(`${typeLabel} Copied${data.preview ? ': ' + data.preview.substring(0, 50) : ''}`);
+      if (S.activeTab === 'clipboard') loadClipboard();
+    } catch (_) {
+      toast('📋 Copied');
+    }
+  });
+
+  _eventSource.onerror = () => {
+    console.warn('[TypeKeep] SSE disconnected, will reconnect...');
+    setTimeout(() => {
+      if (!_eventSource || _eventSource.readyState === EventSource.CLOSED) startSSE();
+    }, 3000);
+  };
+}
+
+function startRefresh() {
+  // Start SSE for real-time updates
+  startSSE();
+
+  // Fallback polling in case SSE drops
+  _refreshTimer = setInterval(() => {
+    if (document.hidden) return;
+    if (!_eventSource || _eventSource.readyState !== EventSource.OPEN) {
+      loadMessages();
+      loadStats();
+    }
   }, REFRESH_MS);
+
+  // Reconnect SSE when tab becomes visible again
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      if (!_eventSource || _eventSource.readyState !== EventSource.OPEN) {
+        startSSE();
+      }
+      loadMessages();
+      loadStats();
+    }
+  });
 }
 
 /* ── Persistence ───────────────────────────────────────────── */
@@ -1116,8 +1209,17 @@ function saveFilters() {
 function restoreFilters() {
   try {
     const s = localStorage.getItem('tk_filters');
-    if (s) Object.assign(S.filters, JSON.parse(s));
+    if (s) {
+      const saved = JSON.parse(s);
+      Object.assign(S.filters, saved);
+    }
+    // Ensure defaults for new filter fields
+    if (!S.filters.split_enter) S.filters.split_enter = 'true';
+    if (!S.filters.context_aware) S.filters.context_aware = 'true';
+    if (!S.filters.smart_enter) S.filters.smart_enter = 'true';
   } catch (_) {}
+  // Update button states after restore
+  setTimeout(updateFilterButtons, 0);
 }
 
 /* ── Utilities ─────────────────────────────────────────────── */

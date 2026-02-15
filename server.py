@@ -6,7 +6,9 @@ import os
 import time
 import uuid
 import logging
-from flask import Flask, jsonify, request, render_template, send_file, send_from_directory
+import queue
+import threading
+from flask import Flask, jsonify, request, render_template, send_file, send_from_directory, Response
 
 
 def create_app(database, recorder, config, cloud_sync=None):
@@ -15,6 +17,26 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.WARNING)
+
+    # SSE clients for live updates
+    _sse_clients = []
+    _sse_lock = threading.Lock()
+
+    def _broadcast_sse(event_type, data=None):
+        """Send an SSE event to all connected clients."""
+        msg = f"event: {event_type}\ndata: {json.dumps(data or {})}\n\n"
+        with _sse_lock:
+            dead = []
+            for q in _sse_clients:
+                try:
+                    q.put_nowait(msg)
+                except Exception:
+                    dead.append(q)
+            for q in dead:
+                _sse_clients.remove(q)
+
+    # Expose broadcast function for clipboard monitor
+    app.broadcast_sse = _broadcast_sse
 
     # Ensure device identity
     if not config.get('device_id'):
@@ -53,7 +75,9 @@ def create_app(database, recorder, config, cloud_sync=None):
         sort = request.args.get('sort', 'newest')
         limit = request.args.get('limit', 50, type=int)
         offset = request.args.get('offset', 0, type=int)
-        split_enter = request.args.get('split_enter', 'false') == 'true'
+        split_enter = request.args.get('split_enter', str(config.get('split_on_enter', True)).lower()) == 'true'
+        context_aware = request.args.get('context_aware', str(config.get('context_aware_grouping', True)).lower()) == 'true'
+        smart_enter = request.args.get('smart_enter', str(config.get('smart_enter', True)).lower()) == 'true'
         start, end = _time_range()
 
         database.flush_buffer()
@@ -64,6 +88,8 @@ def create_app(database, recorder, config, cloud_sync=None):
             min_length=min_len, sort=sort,
             limit=limit, offset=offset,
             split_on_enter=split_enter,
+            context_aware=context_aware,
+            smart_enter=smart_enter,
         )
         return jsonify({'messages': messages, 'total': total,
                         'has_more': (offset + limit) < total})
@@ -129,16 +155,23 @@ def create_app(database, recorder, config, cloud_sync=None):
             'record_shortcuts', 'record_notifications', 'record_clipboard',
             'clipboard_retention_days', 'mouse_sample_ms',
             'min_message_length', 'max_messages_display', 'split_on_enter',
-            'start_on_boot', 'start_minimized', 'show_onboarding',
+            'context_aware_grouping', 'smart_enter',
+            'start_on_boot', 'start_background_on_boot', 'start_ui_on_boot',
+            'start_minimized', 'show_onboarding',
             'backup_enabled', 'backup_service', 'backup_interval_minutes',
-            'buffer_flush_seconds', 'theme',            'cloud_sync_enabled', 'supabase_url', 'supabase_anon_key',
-            'cloud_sync_key', 'cloud_sync_clipboard', 'cloud_sync_messages',        }
+            'buffer_flush_seconds', 'theme',
+            'cloud_sync_enabled', 'supabase_url', 'supabase_anon_key',
+            'cloud_sync_key', 'cloud_sync_clipboard', 'cloud_sync_messages',
+        }
         filtered = {k: v for k, v in data.items() if k in safe_keys}
         config.update(filtered)
 
         # Handle start-on-boot toggle
-        if 'start_on_boot' in filtered:
-            _set_startup(filtered['start_on_boot'])
+        if 'start_on_boot' in filtered or 'start_background_on_boot' in filtered:
+            boot_enabled = filtered.get('start_on_boot', config.get('start_on_boot', True))
+            bg_mode = filtered.get('start_background_on_boot', config.get('start_background_on_boot', True))
+            ui_on_boot = filtered.get('start_ui_on_boot', config.get('start_ui_on_boot', False))
+            _set_startup(boot_enabled, bg_mode, ui_on_boot)
 
         # Restart cloud sync if settings changed
         if cloud_sync and any(k in filtered for k in (
@@ -532,7 +565,42 @@ def create_app(database, recorder, config, cloud_sync=None):
             source_app=data.get('source_app', 'API'),
         )
         return jsonify({'status': 'ok' if ok else 'error'})
+    # ── Server-Sent Events (live updates) ────────────────────
 
+    @app.route('/api/events-stream')
+    def api_sse():
+        """SSE endpoint for real-time updates. Keeps connection alive."""
+        client_q = queue.Queue(maxsize=50)
+        with _sse_lock:
+            _sse_clients.append(client_q)
+
+        def generate():
+            try:
+                # Send initial heartbeat
+                yield 'event: connected\ndata: {}\n\n'
+                while True:
+                    try:
+                        msg = client_q.get(timeout=15)
+                        yield msg
+                    except queue.Empty:
+                        # Send keepalive comment
+                        yield ': keepalive\n\n'
+            except GeneratorExit:
+                pass
+            finally:
+                with _sse_lock:
+                    if client_q in _sse_clients:
+                        _sse_clients.remove(client_q)
+
+        return Response(
+            generate(),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no',
+            },
+        )
     # ── Mobile PWA serving ─────────────────────────────────────
 
     @app.route('/mobile')
@@ -550,7 +618,7 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     # ── Startup helper (Windows registry) ──────────────────────
 
-    def _set_startup(enabled):
+    def _set_startup(enabled, bg_mode=True, ui_on_boot=False):
         try:
             import sys, os, winreg
             key = winreg.OpenKey(
@@ -559,9 +627,14 @@ def create_app(database, recorder, config, cloud_sync=None):
                 0, winreg.KEY_SET_VALUE)
             if enabled:
                 script = os.path.abspath(os.path.join(
-                    os.path.dirname(__file__), '..', 'typekeep.py'))
-                winreg.SetValueEx(key, 'TypeKeep', 0, winreg.REG_SZ,
-                                  f'pythonw "{script}"')
+                    os.path.dirname(__file__), 'typekeep.py'))
+                # Background mode: run recorder only (minimized, no browser)
+                if bg_mode and not ui_on_boot:
+                    winreg.SetValueEx(key, 'TypeKeep', 0, winreg.REG_SZ,
+                                      f'pythonw "{script}" --background')
+                else:
+                    winreg.SetValueEx(key, 'TypeKeep', 0, winreg.REG_SZ,
+                                      f'pythonw "{script}"')
             else:
                 try:
                     winreg.DeleteValue(key, 'TypeKeep')

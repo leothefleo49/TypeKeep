@@ -74,7 +74,24 @@ class ClipboardMonitor:
         self._thread = None
         self._last_seq = 0
         self._last_hash = ''
+        self._broadcast_fn = None
         os.makedirs(CLIPS_DIR, exist_ok=True)
+
+    def set_broadcast_fn(self, fn):
+        """Set the SSE broadcast function for real-time notifications."""
+        self._broadcast_fn = fn
+
+    def _notify_copied(self, content_type, preview=''):
+        """Broadcast a 'copied' event to all connected UI clients."""
+        if self._broadcast_fn:
+            try:
+                self._broadcast_fn('clipboard_copied', {
+                    'type': content_type,
+                    'preview': (preview[:100] + '...') if len(preview) > 100 else preview,
+                    'ts': time.time(),
+                })
+            except Exception:
+                pass
 
     # ── Lifecycle ──────────────────────────────────────────────
 
@@ -157,6 +174,7 @@ class ClipboardMonitor:
                 source_app=proc,
                 source_title=title,
             )
+            self._notify_copied('text', text[:200])
         finally:
             _kernel32.GlobalUnlock(handle)
 
@@ -199,6 +217,8 @@ class ClipboardMonitor:
                     'size': os.path.getsize(filepath),
                 }),
             )
+            self._notify_copied('image', f'{img.width}x{img.height} image')
+            )
         except Exception:
             pass
 
@@ -235,3 +255,4 @@ class ClipboardMonitor:
             source_title=title,
             extra=json.dumps({'file_count': len(files), 'files': files}),
         )
+        self._notify_copied('files', f'{len(files)} file(s)')

@@ -106,6 +106,8 @@
             <div class="cs-option" data-value="chrono">Chronological</div>
           </div>
         </div>
+        <button class="btn-ghost-sm" id="filter-split-enter" onclick="toggleFilterSplitEnter()" title="Split on Enter key">↵ Split Enter</button>
+        <button class="btn-ghost-sm active" id="filter-context-aware" onclick="toggleFilterContextAware()" title="Context-aware grouping">🧠 Context</button>
       </div>
       <div class="filter-actions">
         <button class="btn-danger-sm" onclick="openDeleteModal()" title="Delete data">
@@ -349,13 +351,23 @@
         <div class="field"><label>Default gap (seconds)</label><input type="number" id="s-gap" min="1" max="600" value="5"></div>
         <div class="field"><label>Same-window gap (seconds)</label><input type="number" id="s-swgap" min="1" max="3600" value="30"></div>
         <div class="field"><label>Min message length</label><input type="number" id="s-minlen" min="0" max="1000" value="1"></div>
-        <div class="field-check"><input type="checkbox" id="s-split-enter"><label for="s-split-enter">Split on Enter key</label></div>
+        <div class="field-check"><input type="checkbox" id="s-context-aware" checked><label for="s-context-aware">Context-aware grouping</label></div>
+        <p class="hint" style="margin-left:28px">Groups text intelligently based on app, window, typing speed, and input context instead of static time gaps.</p>
+        <div class="field-check"><input type="checkbox" id="s-split-enter" checked><label for="s-split-enter">Split on Enter key</label></div>
+        <div class="field-check"><input type="checkbox" id="s-smart-enter" checked><label for="s-smart-enter">Smart Enter filtering</label></div>
+        <p class="hint" style="margin-left:28px">Detects list patterns (item → Enter → item) and keeps them grouped. Double-Enter splits as paragraph break.</p>
       </fieldset>
       <fieldset>
         <legend>Data</legend>
         <div class="field"><label>Retention (days)</label><input type="number" id="s-retention" min="1" max="3650" value="30"></div>
         <div class="field"><label>Auto-save interval (seconds)</label><input type="number" id="s-flush" min="1" max="60" value="1"></div>
-        <div class="field-check"><input type="checkbox" id="s-boot"><label for="s-boot">Start on system boot</label></div>
+      </fieldset>
+      <fieldset>
+        <legend>Startup</legend>
+        <div class="field-check"><input type="checkbox" id="s-boot" checked><label for="s-boot">Start on system boot</label></div>
+        <div class="field-check"><input type="checkbox" id="s-bg-boot" checked><label for="s-bg-boot">Run recorder in background on boot</label></div>
+        <p class="hint" style="margin-left:28px">Starts the recorder silently without opening the dashboard. ⚠️ If disabled, TypeKeep won't record until you manually launch it after each reboot.</p>
+        <div class="field-check"><input type="checkbox" id="s-ui-boot"><label for="s-ui-boot">Also open dashboard UI on boot</label></div>
       </fieldset>
       <fieldset>
         <legend>Danger Zone</legend>

@@ -20,7 +20,9 @@ DEFAULTS = {
     # Grouping
     'default_gap_seconds': 5,
     'same_window_gap_seconds': 30,
-    'split_on_enter': False,
+    'split_on_enter': True,
+    'context_aware_grouping': True,
+    'smart_enter': True,
 
     # Display
     'min_message_length': 1,
@@ -34,7 +36,9 @@ DEFAULTS = {
     'auto_save_interval': 1,
 
     # Startup
-    'start_on_boot': False,
+    'start_on_boot': True,
+    'start_background_on_boot': True,
+    'start_ui_on_boot': False,
     'start_minimized': True,
     'show_onboarding': True,
 

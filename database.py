@@ -149,15 +149,22 @@ class Database:
                      start_time=None, end_time=None,
                      process=None, search=None, min_length=1,
                      sort='newest', limit=50, offset=0,
-                     split_on_enter=False):
+                     split_on_enter=False, context_aware=True,
+                     smart_enter=True):
         """Group key_press events into messages using context-aware grouping.
 
-        Same-window events tolerate a larger time gap (same_window_gap).
-        Different-window transitions always split.
+        Context-aware mode (default) adapts gap thresholds dynamically:
+        - Same app + same text field → very tolerant (up to same_window_gap)
+        - Same app, different window/field → moderate gap
+        - Different app → strict gap (base_gap)
+        - Considers typing speed, burst patterns, navigation keys
+        - Smart Enter: consecutive Enter keys in list-like patterns stay grouped
         """
         events = self.get_events(start_time, end_time, 'key_press', process)
-        groups = self._group_events(events, gap_seconds, same_window_gap,
-                                    split_on_enter)
+        groups = self._group_events_context_aware(
+            events, gap_seconds, same_window_gap,
+            split_on_enter, context_aware, smart_enter,
+        )
         messages = []
         for grp in groups:
             msg = self._build_message(grp)
@@ -177,40 +184,176 @@ class Database:
         page = messages[offset:offset + limit]
         return page, total
 
-    def _group_events(self, events, base_gap, same_window_gap,
-                      split_on_enter):
-        """Split events into groups by window context + time gaps."""
+    # ── Context classification helpers ─────────────────────────
+
+    @staticmethod
+    def _is_navigation_key(key_name):
+        """Return True if key is a navigation/control key (not character input)."""
+        kn = (key_name or '').lower().replace('key.', '')
+        nav_keys = {'left', 'right', 'up', 'down', 'home', 'end',
+                    'page_up', 'page_down', 'tab', 'escape', 'esc',
+                    'insert', 'delete', 'f1', 'f2', 'f3', 'f4', 'f5',
+                    'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12',
+                    'caps_lock', 'num_lock', 'scroll_lock', 'print_screen'}
+        return kn in nav_keys
+
+    @staticmethod
+    def _is_text_input_key(event):
+        """Return True if event produces text output (character, space, enter)."""
+        ch = event.get('character')
+        kn = (event.get('key_name') or '').lower()
+        mods = (event.get('modifiers') or '').lower()
+        if 'ctrl' in mods or 'alt' in mods:
+            return False
+        if ch and len(ch) == 1:
+            return True
+        return any(x in kn for x in ('space', 'enter', 'return', 'tab', 'backspace'))
+
+    @staticmethod
+    def _compute_typing_speed(events, window=10):
+        """Compute chars-per-second over the last `window` text-input events."""
+        text_events = [e for e in events if Database._is_text_input_key(e)]
+        if len(text_events) < 2:
+            return 0.0
+        recent = text_events[-window:]
+        if len(recent) < 2:
+            return 0.0
+        dt = recent[-1]['timestamp'] - recent[0]['timestamp']
+        if dt <= 0:
+            return 999.0  # instantaneous burst
+        return len(recent) / dt
+
+    @staticmethod
+    def _looks_like_list_entry(events_before_enter, events_after_enter):
+        """Detect list-like patterns: text → Enter → text → Enter ...
+
+        Returns True if the text around Enter keys looks like a list being
+        typed (e.g., bullet points, numbered items, short lines).
+        """
+        if not events_after_enter:
+            return False
+
+        # Count text chars before this Enter
+        chars_before = 0
+        for e in reversed(events_before_enter):
+            kn = (e.get('key_name') or '').lower()
+            if 'enter' in kn or 'return' in kn:
+                break
+            if e.get('character') or 'space' in kn:
+                chars_before += 1
+        # Short lines (< 120 chars) followed by another Enter → list pattern
+        if 1 <= chars_before <= 120:
+            return True
+        return False
+
+    @staticmethod
+    def _count_consecutive_enters(events, start_idx):
+        """Count how many consecutive Enter keys appear starting at start_idx."""
+        count = 0
+        for i in range(start_idx, len(events)):
+            kn = (events[i].get('key_name') or '').lower()
+            if 'enter' in kn or 'return' in kn:
+                count += 1
+            else:
+                break
+        return count
+
+    def _group_events_context_aware(self, events, base_gap, same_window_gap,
+                                    split_on_enter, context_aware, smart_enter):
+        """Advanced context-aware splitting.
+
+        Factors considered:
+        1. App (process) change → always split
+        2. Window title change → split if time gap > moderate threshold
+        3. Time gap → adaptive based on typing speed and context
+        4. Enter key → smart detection of list vs paragraph boundary
+        5. Mouse click between keys → likely moved to different text field
+        """
         if not events:
             return []
+
         groups = []
         group = [events[0]]
 
-        for ev in events[1:]:
+        for idx in range(1, len(events)):
+            ev = events[idx]
             last = group[-1]
             dt = ev['timestamp'] - last['timestamp']
-            same_win = (ev.get('window_process') == last.get('window_process')
-                        and ev.get('window_title') == last.get('window_title'))
 
-            # Split on Enter if configured
-            if split_on_enter:
-                kn = (last.get('key_name') or '').lower()
-                if 'enter' in kn or 'return' in kn:
-                    groups.append(group)
-                    group = [ev]
-                    continue
+            same_proc = (ev.get('window_process') == last.get('window_process'))
+            same_title = (ev.get('window_title') == last.get('window_title'))
 
-            if same_win:
-                if dt > same_window_gap:
-                    groups.append(group)
-                    group = [ev]
+            should_split = False
+
+            # --- Enter key splitting ---
+            last_kn = (last.get('key_name') or '').lower()
+            is_enter = 'enter' in last_kn or 'return' in last_kn
+
+            if is_enter and split_on_enter:
+                if smart_enter and context_aware:
+                    # Smart enter: don't split if it looks like a list
+                    consecutive = self._count_consecutive_enters(events, idx - 1)
+                    # Only 1 enter and text follows → could be list item
+                    if consecutive == 1:
+                        before_slice = group[:-1] if len(group) > 1 else group
+                        after_slice = events[idx:idx + 5]
+                        if self._looks_like_list_entry(before_slice, after_slice):
+                            # List pattern detected — keep grouped
+                            group.append(ev)
+                            continue
+                    # Multiple blank enters (2+) → paragraph break, split
+                    if consecutive >= 2:
+                        should_split = True
                 else:
-                    group.append(ev)
+                    # Dumb split: every enter splits
+                    should_split = True
+
+            if not should_split and context_aware:
+                # --- App change (always split) ---
+                if not same_proc:
+                    should_split = True
+                # --- Same app, different window title ---
+                elif same_proc and not same_title:
+                    # Moderate threshold: half the same-window gap
+                    moderate_gap = max(base_gap, same_window_gap * 0.4)
+                    if dt > moderate_gap:
+                        should_split = True
+                    else:
+                        # Title changed but very quick → might be autocomplete,
+                        # tab title update, etc. Keep together if fast typing.
+                        speed = self._compute_typing_speed(group)
+                        if speed < 1.0 and dt > base_gap:
+                            should_split = True
+                # --- Same app, same window ---
+                elif same_proc and same_title:
+                    # Adaptive gap based on typing speed
+                    speed = self._compute_typing_speed(group)
+                    if speed > 3.0:
+                        # Fast typist → more tolerant gap
+                        effective_gap = same_window_gap * 1.5
+                    elif speed > 1.0:
+                        effective_gap = same_window_gap
+                    else:
+                        # Slow typing or navigation → tighter gap
+                        effective_gap = same_window_gap * 0.7
+
+                    if dt > effective_gap:
+                        should_split = True
+            elif not should_split:
+                # Legacy mode: simple gap-based splitting
+                same_win = same_proc and same_title
+                if same_win:
+                    if dt > same_window_gap:
+                        should_split = True
+                else:
+                    if dt > base_gap:
+                        should_split = True
+
+            if should_split:
+                groups.append(group)
+                group = [ev]
             else:
-                if dt > base_gap:
-                    groups.append(group)
-                    group = [ev]
-                else:
-                    group.append(ev)
+                group.append(ev)
 
         if group:
             groups.append(group)
