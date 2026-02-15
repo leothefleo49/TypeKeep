@@ -58,7 +58,7 @@ DEFAULTS = {
     # Cloud Sync (Supabase)
     'cloud_sync_enabled': False,
     'supabase_url': 'https://tnbxhpgrtekshowzfdrg.supabase.co',
-    'supabase_anon_key': 'sb_publishable_JFmUlEYrgoJ0IFQUifnqMA_Gd3-Imt3',
+    'supabase_anon_key': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRuYnhocGdydGVrc2hvd3pmZHJnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExNzAzMzYsImV4cCI6MjA4Njc0NjMzNn0.2GfWPX6ryh_KHAURH4xlmdT4liqFpE01zPnB6Mlbn7E',
     'cloud_sync_key': '',
     'cloud_sync_clipboard': True,
     'cloud_sync_messages': True,

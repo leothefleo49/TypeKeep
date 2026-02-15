@@ -8,7 +8,7 @@ const STORAGE_KEY = 'typekeep_mobile';
 
 // Default Supabase instance (shared)
 const DEFAULT_SUPA_URL = 'https://tnbxhpgrtekshowzfdrg.supabase.co';
-const DEFAULT_SUPA_KEY = 'sb_publishable_JFmUlEYrgoJ0IFQUifnqMA_Gd3-Imt3';
+const DEFAULT_SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRuYnhocGdydGVrc2hvd3pmZHJnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExNzAzMzYsImV4cCI6MjA4Njc0NjMzNn0.2GfWPX6ryh_KHAURH4xlmdT4liqFpE01zPnB6Mlbn7E';
 
 /* ── State ─────────────────────────────────────────────────── */
 const S = {
