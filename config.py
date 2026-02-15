@@ -55,6 +55,14 @@ DEFAULTS = {
     'backup_service': 'none',        # none / gdrive / onedrive
     'backup_interval_minutes': 60,
 
+    # Cloud Sync (Supabase)
+    'cloud_sync_enabled': False,
+    'supabase_url': '',
+    'supabase_anon_key': '',
+    'cloud_sync_key': '',
+    'cloud_sync_clipboard': True,
+    'cloud_sync_messages': True,
+
     # Theme
     'theme': 'dark',
 }

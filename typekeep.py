@@ -18,6 +18,7 @@ from recorder import Recorder
 from server import create_app
 from tray import TrayIcon
 from clipboard_monitor import ClipboardMonitor
+from cloud_sync import CloudSync
 
 
 def _port_in_use(port: int) -> bool:
@@ -37,7 +38,8 @@ def main():
     db = Database()
     recorder = Recorder(db, config)
     clipboard = ClipboardMonitor(db, config)
-    app = create_app(db, recorder, config)
+    cloud = CloudSync(db, config)
+    app = create_app(db, recorder, config, cloud)
 
     # Flask in background thread
     threading.Thread(
@@ -48,6 +50,7 @@ def main():
 
     recorder.start()
     clipboard.start()
+    cloud.start()
 
     # Periodic flush & cleanup (crash-resistant: flush every 1s)
     def _periodic():
@@ -87,6 +90,7 @@ def main():
     print("\n[TypeKeep] Shutting down...")
     recorder.stop()
     clipboard.stop()
+    cloud.stop()
     db.flush_buffer()
     db.close()
 

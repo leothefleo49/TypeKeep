@@ -557,6 +557,14 @@ function openSettings() {
   el('s-retention').value     = s.retention_days ?? 30;
   el('s-flush').value         = s.buffer_flush_seconds ?? 1;
   el('s-boot').checked        = s.start_on_boot ?? false;
+  // Cloud sync
+  el('s-supa-url').value      = s.supabase_url ?? '';
+  el('s-supa-key').value      = s.supabase_anon_key ?? '';
+  el('s-cloud-key').value     = s.cloud_sync_key ?? '';
+  el('s-cloud-enabled').checked = s.cloud_sync_enabled ?? false;
+  el('s-cloud-clipboard').checked = s.cloud_sync_clipboard ?? true;
+  el('s-cloud-messages').checked = s.cloud_sync_messages ?? true;
+  el('cloud-test-result').textContent = '';
   el('settings-modal').style.display = '';
 }
 
@@ -578,6 +586,13 @@ async function saveSettings() {
     retention_days:        +el('s-retention').value,
     buffer_flush_seconds:  +el('s-flush').value,
     start_on_boot:         el('s-boot').checked,
+    // Cloud sync
+    supabase_url:          el('s-supa-url').value.trim().replace(/\/$/, ''),
+    supabase_anon_key:     el('s-supa-key').value.trim(),
+    cloud_sync_key:        el('s-cloud-key').value.trim(),
+    cloud_sync_enabled:    el('s-cloud-enabled').checked,
+    cloud_sync_clipboard:  el('s-cloud-clipboard').checked,
+    cloud_sync_messages:   el('s-cloud-messages').checked,
   };
   try {
     const r = await api('/api/settings', {
@@ -588,6 +603,32 @@ async function saveSettings() {
     toast('Settings saved');
     closeSettings();
   } catch (_) { toast('Failed to save settings'); }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   CLOUD SYNC
+   ══════════════════════════════════════════════════════════════ */
+async function testCloudConnection() {
+  const result = el('cloud-test-result');
+  result.textContent = 'Testing...';
+  result.style.color = 'var(--txt-muted)';
+  try {
+    // Save settings first so the backend has the latest config
+    await saveSettings();
+    const r = await api('/api/cloud/test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    });
+    if (r.connected) {
+      result.textContent = '✅ Connected!';
+      result.style.color = '#22c55e';
+    } else {
+      result.textContent = '❌ ' + (r.error || 'Failed');
+      result.style.color = '#ef4444';
+    }
+  } catch (e) {
+    result.textContent = '❌ ' + e.message;
+    result.style.color = '#ef4444';
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════

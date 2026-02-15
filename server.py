@@ -9,7 +9,7 @@ import logging
 from flask import Flask, jsonify, request, render_template, send_file, send_from_directory
 
 
-def create_app(database, recorder, config):
+def create_app(database, recorder, config, cloud_sync=None):
     app = Flask(__name__)
     app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
@@ -131,14 +131,20 @@ def create_app(database, recorder, config):
             'min_message_length', 'max_messages_display', 'split_on_enter',
             'start_on_boot', 'start_minimized', 'show_onboarding',
             'backup_enabled', 'backup_service', 'backup_interval_minutes',
-            'buffer_flush_seconds', 'theme',
-        }
+            'buffer_flush_seconds', 'theme',            'cloud_sync_enabled', 'supabase_url', 'supabase_anon_key',
+            'cloud_sync_key', 'cloud_sync_clipboard', 'cloud_sync_messages',        }
         filtered = {k: v for k, v in data.items() if k in safe_keys}
         config.update(filtered)
 
         # Handle start-on-boot toggle
         if 'start_on_boot' in filtered:
             _set_startup(filtered['start_on_boot'])
+
+        # Restart cloud sync if settings changed
+        if cloud_sync and any(k in filtered for k in (
+                'cloud_sync_enabled', 'supabase_url',
+                'supabase_anon_key', 'cloud_sync_key')):
+            cloud_sync.restart()
 
         return jsonify({'status': 'ok', 'settings': config.to_dict()})
 
@@ -470,6 +476,77 @@ def create_app(database, recorder, config):
                 device_id=data.get('device_id'),
             )
         return jsonify({'status': 'ok'})
+
+    # ── Cloud Sync API ──────────────────────────────────────────
+
+    @app.route('/api/cloud/status')
+    def api_cloud_status():
+        if not cloud_sync:
+            return jsonify({'available': False})
+        return jsonify({
+            'available': True,
+            'enabled': cloud_sync.enabled,
+            'connected': cloud_sync.enabled,
+            'sync_key': config.get('cloud_sync_key', ''),
+            'supabase_url': config.get('supabase_url', ''),
+        })
+
+    @app.route('/api/cloud/test', methods=['POST'])
+    def api_cloud_test():
+        if not cloud_sync:
+            return jsonify({'status': 'error', 'error': 'Cloud sync not available'}), 400
+        result = cloud_sync.test_connection()
+        return jsonify(result)
+
+    @app.route('/api/cloud/devices')
+    def api_cloud_devices():
+        if not cloud_sync:
+            return jsonify({'devices': []})
+        devices = cloud_sync.get_cloud_devices()
+        return jsonify({'devices': devices})
+
+    @app.route('/api/cloud/clipboard')
+    def api_cloud_clipboard():
+        if not cloud_sync:
+            return jsonify({'entries': []})
+        limit = request.args.get('limit', 50, type=int)
+        entries = cloud_sync.get_cloud_clipboard(limit)
+        return jsonify({'entries': entries})
+
+    @app.route('/api/cloud/messages')
+    def api_cloud_messages():
+        if not cloud_sync:
+            return jsonify({'messages': []})
+        limit = request.args.get('limit', 50, type=int)
+        messages = cloud_sync.get_cloud_messages(limit)
+        return jsonify({'messages': messages})
+
+    @app.route('/api/cloud/push-clipboard', methods=['POST'])
+    def api_cloud_push_clipboard():
+        if not cloud_sync:
+            return jsonify({'error': 'Cloud sync not available'}), 400
+        data = request.get_json(silent=True) or {}
+        ok = cloud_sync.push_clipboard_entry(
+            content_type=data.get('content_type', 'text'),
+            content_text=data.get('content_text', ''),
+            source_app=data.get('source_app', 'API'),
+        )
+        return jsonify({'status': 'ok' if ok else 'error'})
+
+    # ── Mobile PWA serving ─────────────────────────────────────
+
+    @app.route('/mobile')
+    @app.route('/mobile/')
+    def serve_mobile():
+        mobile_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'mobile')
+        return send_from_directory(mobile_dir, 'index.html')
+
+    @app.route('/mobile/<path:filename>')
+    def serve_mobile_files(filename):
+        mobile_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'mobile')
+        return send_from_directory(mobile_dir, filename)
 
     # ── Startup helper (Windows registry) ──────────────────────
 
