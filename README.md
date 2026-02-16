@@ -20,16 +20,16 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-windows.zip">
-    <img src="https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows Download">
+  <a href="https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-Setup-Windows.exe">
+    <img src="https://img.shields.io/badge/Download-Windows%20(.exe)-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows Download">
   </a>
   &nbsp;
-  <a href="https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-macos.tar.gz">
-    <img src="https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS Download">
+  <a href="https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-Installer-macOS.sh">
+    <img src="https://img.shields.io/badge/Download-macOS%20(.sh)-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS Download">
   </a>
   &nbsp;
-  <a href="https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-linux.tar.gz">
-    <img src="https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux Download">
+  <a href="https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-Installer-Linux.sh">
+    <img src="https://img.shields.io/badge/Download-Linux%20(.sh)-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux Download">
   </a>
   &nbsp;
   <a href="https://leothefleo49.github.io/TypeKeep/">
@@ -117,17 +117,17 @@
 
 ### One-Click Download
 
-Each download bundles **both TypeKeep + TypeKeep Companion** together with an installer that sets everything up and links the two apps automatically.
+**One file per OS.** Each installer bundles both TypeKeep + TypeKeep Companion. Download one file, run it, done.
 
-| Platform | Download | What's inside | How to install |
-|----------|----------|--------------|----------------|
-| **Windows** | [`TypeKeep-windows.zip`](https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-windows.zip) | `TypeKeep.exe` + `TypeKeep-Companion.exe` + `setup-windows.bat` | Extract the zip → double-click **`setup-windows.bat`** |
-| **macOS** | [`TypeKeep-macos.tar.gz`](https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-macos.tar.gz) | `TypeKeep` + `TypeKeep Companion.dmg` + `install-macos.sh` | Extract → run **`./install-macos.sh`** in Terminal |
-| **Linux** | [`TypeKeep-linux.tar.gz`](https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-linux.tar.gz) | `TypeKeep` + `TypeKeep-Companion.AppImage` + `install-linux.sh` | Extract → run **`./install-linux.sh`** in Terminal |
-| **Android / iOS** | [**Mobile Web App**](https://leothefleo49.github.io/TypeKeep/) | Progressive Web App | Open link → "Add to Home Screen" |
+| Platform | Download | How to install |
+|----------|----------|----------------|
+| **Windows** | [`TypeKeep-Setup-Windows.exe`](https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-Setup-Windows.exe) | Double-click the `.exe` — standard Windows installer |
+| **macOS** | [`TypeKeep-Installer-macOS.sh`](https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-Installer-macOS.sh) | Run in Terminal (see below) |
+| **Linux** | [`TypeKeep-Installer-Linux.sh`](https://github.com/leothefleo49/TypeKeep/releases/latest/download/TypeKeep-Installer-Linux.sh) | Run in Terminal (see below) |
+| **Android / iOS** | [**Mobile Web App**](https://leothefleo49.github.io/TypeKeep/) | Open link → "Add to Home Screen" |
 
 > **The installer will automatically:**
-> - Install both TypeKeep and TypeKeep Companion to the right location
+> - Install both TypeKeep and TypeKeep Companion
 > - Link the two apps together (shared config)
 > - Create desktop shortcuts and app launchers
 > - Set up auto-start on login
@@ -135,35 +135,20 @@ Each download bundles **both TypeKeep + TypeKeep Companion** together with an in
 
 ### Windows
 
-```
-1. Download TypeKeep-windows.zip
-2. Extract the zip to any folder
-3. Double-click setup-windows.bat
-4. Done — shortcuts on Desktop & Start Menu, auto-starts on login
-```
+Download and double-click **`TypeKeep-Setup-Windows.exe`**. That's it — standard installer wizard with shortcuts, auto-start, and Add/Remove Programs entry.
 
 ### macOS
 
 ```bash
-# Download and extract
-tar -xzf TypeKeep-macos.tar.gz
-cd TypeKeep-macos
-
-# Run the installer
-chmod +x install-macos.sh
-./install-macos.sh
+chmod +x TypeKeep-Installer-macOS.sh
+./TypeKeep-Installer-macOS.sh
 ```
 
 ### Linux
 
 ```bash
-# Download and extract
-tar -xzf TypeKeep-linux.tar.gz
-cd TypeKeep-linux
-
-# Run the installer
-chmod +x install-linux.sh
-./install-linux.sh
+chmod +x TypeKeep-Installer-Linux.sh
+./TypeKeep-Installer-Linux.sh
 ```
 
 ### Quick Start (Python — from source)
@@ -344,9 +329,9 @@ TypeKeep/
 ├── supabase_setup.sql    # Database setup for Supabase
 ├── requirements.txt      # Python dependencies
 ├── installers/
-│   ├── setup-windows.bat # Windows all-in-one installer
-│   ├── install-macos.sh  # macOS all-in-one installer
-│   └── install-linux.sh  # Linux all-in-one installer
+│   ├── typekeep.nsi      # NSIS script → builds TypeKeep-Setup-Windows.exe
+│   ├── install-macos.sh  # Self-extracting macOS installer
+│   └── install-linux.sh  # Self-extracting Linux installer
 ├── templates/
 │   └── index.html        # Dashboard SPA
 ├── static/

@@ -19,7 +19,10 @@ permissions:
 
 # ────────────────────────────────────────────────────────────────
 #  Each job builds BOTH TypeKeep + Companion for one OS,
-#  bundles them with the install script into a single archive.
+#  then produces a SINGLE installer file:
+#    Windows → .exe  (NSIS)
+#    macOS   → .sh   (self-extracting)
+#    Linux   → .sh   (self-extracting)
 # ────────────────────────────────────────────────────────────────
 
 jobs:
@@ -69,29 +72,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Bundle both + installer into one zip ──
-      - name: Create unified bundle
+      # ── Build single NSIS installer ──
+      - name: Prepare NSIS build directory
         run: |
-          New-Item -ItemType Directory -Path bundle -Force
-
-          # TypeKeep main
-          Copy-Item dist/TypeKeep.exe bundle/TypeKeep.exe
-
-          # Companion portable exe (find the generated file)
+          New-Item -ItemType Directory -Path nsis-build -Force
+          Copy-Item dist/TypeKeep.exe nsis-build/TypeKeep.exe
           $companion = Get-ChildItem mobile-app/dist/*.exe | Select-Object -First 1
-          Copy-Item $companion.FullName bundle/TypeKeep-Companion.exe
+          Copy-Item $companion.FullName nsis-build/TypeKeep-Companion.exe
+          Copy-Item installers/typekeep.nsi nsis-build/typekeep.nsi
 
-          # Setup script
-          Copy-Item installers/setup-windows.bat bundle/setup-windows.bat
+      - name: Build NSIS installer
+        run: |
+          makensis nsis-build/typekeep.nsi
 
-          # Zip it
-          Compress-Archive -Path bundle/* -DestinationPath TypeKeep-windows.zip
-
-      - name: Upload unified bundle
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: TypeKeep-windows
-          path: TypeKeep-windows.zip
+          path: nsis-build/TypeKeep-Setup-Windows.exe
 
   # ── macOS ────────────────────────────────────────────────────
   build-macos:
@@ -139,33 +137,34 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Bundle both + installer into one archive ──
-      - name: Create unified bundle
+      # ── Build single self-extracting installer ──
+      - name: Create self-extracting installer
         run: |
-          mkdir -p bundle
+          mkdir -p payload
 
-          # TypeKeep main
-          cp dist/TypeKeep bundle/TypeKeep
-          chmod +x bundle/TypeKeep
+          # TypeKeep main binary
+          cp dist/TypeKeep payload/TypeKeep
+          chmod +x payload/TypeKeep
 
-          # Companion DMG (or .app)
+          # Companion DMG
           DMG=$(find mobile-app/dist -name "*.dmg" | head -1)
           if [ -n "$DMG" ]; then
-            cp "$DMG" "bundle/TypeKeep Companion.dmg"
+            cp "$DMG" "payload/TypeKeep Companion.dmg"
           fi
 
-          # Install script
-          cp installers/install-macos.sh bundle/install-macos.sh
-          chmod +x bundle/install-macos.sh
+          # Create payload archive
+          tar -czf payload.tar.gz -C payload .
 
-          # Archive
-          tar -czf TypeKeep-macos.tar.gz -C bundle .
+          # Concatenate header script + payload into single installer
+          cp installers/install-macos.sh TypeKeep-Installer-macOS.sh
+          cat payload.tar.gz >> TypeKeep-Installer-macOS.sh
+          chmod +x TypeKeep-Installer-macOS.sh
 
-      - name: Upload unified bundle
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: TypeKeep-macos
-          path: TypeKeep-macos.tar.gz
+          path: TypeKeep-Installer-macOS.sh
 
   # ── Linux ────────────────────────────────────────────────────
   build-linux:
@@ -213,35 +212,35 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Bundle both + installer into one archive ──
-      - name: Create unified bundle
+      # ── Build single self-extracting installer ──
+      - name: Create self-extracting installer
         run: |
-          mkdir -p bundle
+          mkdir -p payload
 
-          # TypeKeep main
-          cp dist/TypeKeep bundle/TypeKeep
-          chmod +x bundle/TypeKeep
+          # TypeKeep main binary
+          cp dist/TypeKeep payload/TypeKeep
+          chmod +x payload/TypeKeep
 
           # Companion AppImage
           APPIMAGE=$(find mobile-app/dist -name "*.AppImage" | head -1)
           if [ -n "$APPIMAGE" ]; then
-            APPIMAGE_NAME=$(basename "$APPIMAGE")
-            cp "$APPIMAGE" "bundle/$APPIMAGE_NAME"
-            chmod +x "bundle/$APPIMAGE_NAME"
+            cp "$APPIMAGE" "payload/$(basename "$APPIMAGE")"
+            chmod +x "payload/$(basename "$APPIMAGE")"
           fi
 
-          # Install script
-          cp installers/install-linux.sh bundle/install-linux.sh
-          chmod +x bundle/install-linux.sh
+          # Create payload archive
+          tar -czf payload.tar.gz -C payload .
 
-          # Archive
-          tar -czf TypeKeep-linux.tar.gz -C bundle .
+          # Concatenate header script + payload into single installer
+          cp installers/install-linux.sh TypeKeep-Installer-Linux.sh
+          cat payload.tar.gz >> TypeKeep-Installer-Linux.sh
+          chmod +x TypeKeep-Installer-Linux.sh
 
-      - name: Upload unified bundle
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: TypeKeep-linux
-          path: TypeKeep-linux.tar.gz
+          path: TypeKeep-Installer-Linux.sh
 
   # ── Release ──────────────────────────────────────────────────
   release:
@@ -290,24 +289,24 @@ jobs:
           body: |
             ## Download & Install
 
-            Each download includes **both TypeKeep + TypeKeep Companion** bundled together with an installer that links them automatically.
+            **One file per OS.** Each installer includes both TypeKeep + TypeKeep Companion. Just download and run.
 
-            | Platform | File | Instructions |
-            |----------|------|-------------|
-            | **Windows** | `TypeKeep-windows.zip` | Extract the zip → run `setup-windows.bat` |
-            | **macOS** | `TypeKeep-macos.tar.gz` | Extract → run `./install-macos.sh` |
-            | **Linux** | `TypeKeep-linux.tar.gz` | Extract → run `./install-linux.sh` |
-            | **Mobile** | [Web App](https://leothefleo49.github.io/TypeKeep/) | Open in browser → install as PWA |
+            | Platform | Download | How to install |
+            |----------|----------|----------------|
+            | **Windows** | `TypeKeep-Setup-Windows.exe` | Double-click the .exe |
+            | **macOS** | `TypeKeep-Installer-macOS.sh` | `chmod +x TypeKeep-Installer-macOS.sh && ./TypeKeep-Installer-macOS.sh` |
+            | **Linux** | `TypeKeep-Installer-Linux.sh` | `chmod +x TypeKeep-Installer-Linux.sh && ./TypeKeep-Installer-Linux.sh` |
+            | **Mobile** | [Web App](https://leothefleo49.github.io/TypeKeep/) | Open in browser → Add to Home Screen |
 
             The installer will:
             - Install both TypeKeep and TypeKeep Companion
-            - Link them together automatically (shared config)
+            - Link them together automatically
             - Create desktop shortcuts / app launchers
             - Set up auto-start on login
             - Create an uninstaller
           files: |
-            artifacts/TypeKeep-windows/TypeKeep-windows.zip
-            artifacts/TypeKeep-macos/TypeKeep-macos.tar.gz
-            artifacts/TypeKeep-linux/TypeKeep-linux.tar.gz
+            artifacts/TypeKeep-windows/TypeKeep-Setup-Windows.exe
+            artifacts/TypeKeep-macos/TypeKeep-Installer-macOS.sh
+            artifacts/TypeKeep-linux/TypeKeep-Installer-Linux.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

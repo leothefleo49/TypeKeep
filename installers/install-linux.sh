@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────
-#  TypeKeep — All-in-One Installer (Linux)
+#  TypeKeep — Single-File Installer (Linux)
 #
-#  Installs:
+#  This is a self-extracting archive. Just run:
+#    chmod +x TypeKeep-Installer-Linux.sh && ./TypeKeep-Installer-Linux.sh
+#
+#  It installs BOTH:
 #    1. TypeKeep          — Input logger, clipboard manager & macros
 #    2. TypeKeep Companion — Cross-device sync app (AppImage)
-#
-#  Both apps are linked automatically.
+#  And links them together automatically.
 # ─────────────────────────────────────────────────────────────────
 set -e
 
@@ -14,11 +16,12 @@ CYAN='\033[0;36m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
+BOLD='\033[1m'
 NC='\033[0m'
 
 echo ""
-echo -e "${CYAN}============================================================${NC}"
-echo -e "${CYAN}     TypeKeep — All-in-One Installer (Linux)${NC}"
+echo -e "${CYAN}${BOLD}============================================================${NC}"
+echo -e "${CYAN}${BOLD}     TypeKeep — Installer for Linux${NC}"
 echo -e "${CYAN}============================================================${NC}"
 echo ""
 echo "  This will install:"
@@ -31,7 +34,6 @@ echo ""
 # ── Determine install directory ──────────────────────────────────
 INSTALL_DIR="$HOME/.local/share/typekeep"
 BIN_DIR="$HOME/.local/bin"
-BUNDLE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "  Install location: $INSTALL_DIR"
 echo ""
@@ -43,46 +45,49 @@ fi
 
 echo ""
 
+# ── Extract payload ──────────────────────────────────────────────
+echo -e "  ${CYAN}[1/7]${NC} Extracting files..."
+TMPDIR_INST=$(mktemp -d)
+ARCHIVE_LINE=$(awk '/^__PAYLOAD_BEGINS__$/{print NR + 1; exit 0;}' "${BASH_SOURCE[0]}")
+tail -n +"$ARCHIVE_LINE" "${BASH_SOURCE[0]}" | tar -xzf - -C "$TMPDIR_INST"
+echo "         Extracted to temporary directory."
+
 # ── Create directories ───────────────────────────────────────────
-echo -e "  ${CYAN}[1/6]${NC} Creating directories..."
+echo -e "  ${CYAN}[2/7]${NC} Creating directories..."
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR/data"
 mkdir -p "$BIN_DIR"
 mkdir -p "$HOME/.local/share/applications"
 mkdir -p "$HOME/.config/autostart"
 
-# ── Copy files ───────────────────────────────────────────────────
-echo -e "  ${CYAN}[2/6]${NC} Installing TypeKeep..."
+# ── Install files ────────────────────────────────────────────────
+echo -e "  ${CYAN}[3/7]${NC} Installing applications..."
 
-if [ -f "$BUNDLE_DIR/TypeKeep" ]; then
-    cp "$BUNDLE_DIR/TypeKeep" "$INSTALL_DIR/TypeKeep"
+if [ -f "$TMPDIR_INST/TypeKeep" ]; then
+    cp "$TMPDIR_INST/TypeKeep" "$INSTALL_DIR/TypeKeep"
     chmod +x "$INSTALL_DIR/TypeKeep"
-    echo "         TypeKeep binary installed."
+    echo "         TypeKeep installed."
 else
-    echo -e "  ${RED}ERROR:${NC} TypeKeep binary not found in the installer bundle."
-    echo "  Make sure you extracted the full archive before running install."
+    echo -e "  ${RED}ERROR:${NC} TypeKeep binary not found in archive."
+    rm -rf "$TMPDIR_INST"
     exit 1
 fi
 
 COMPANION_INSTALLED=false
 COMPANION_FILE=""
-for f in "$BUNDLE_DIR"/TypeKeep-Companion*.AppImage "$BUNDLE_DIR"/TypeKeep_Companion*.AppImage; do
-    if [ -f "$f" ]; then
-        COMPANION_FILE="$(basename "$f")"
-        cp "$f" "$INSTALL_DIR/$COMPANION_FILE"
-        chmod +x "$INSTALL_DIR/$COMPANION_FILE"
-        COMPANION_INSTALLED=true
-        echo "         TypeKeep Companion ($COMPANION_FILE) installed."
-        break
-    fi
-done
-
-if [ "$COMPANION_INSTALLED" = false ]; then
-    echo -e "  ${YELLOW}WARNING:${NC} TypeKeep Companion AppImage not found. Companion will not be installed."
+APPIMAGE=$(find "$TMPDIR_INST" -maxdepth 1 -name "*.AppImage" | head -1)
+if [ -n "$APPIMAGE" ]; then
+    COMPANION_FILE=$(basename "$APPIMAGE")
+    cp "$APPIMAGE" "$INSTALL_DIR/$COMPANION_FILE"
+    chmod +x "$INSTALL_DIR/$COMPANION_FILE"
+    COMPANION_INSTALLED=true
+    echo "         TypeKeep Companion ($COMPANION_FILE) installed."
+else
+    echo -e "  ${YELLOW}WARNING:${NC} TypeKeep Companion AppImage not found. Skipping."
 fi
 
-# ── Auto-link: write shared config ───────────────────────────────
-echo -e "  ${CYAN}[3/6]${NC} Linking TypeKeep & Companion..."
+# ── Auto-link ────────────────────────────────────────────────────
+echo -e "  ${CYAN}[4/7]${NC} Linking TypeKeep & Companion..."
 cat > "$INSTALL_DIR/data/link.json" << EOF
 {
   "typekeep_host": "127.0.0.1",
@@ -94,26 +99,24 @@ cat > "$INSTALL_DIR/data/link.json" << EOF
 EOF
 echo "         Apps linked via shared config."
 
-# ── Create symlinks in PATH ──────────────────────────────────────
-echo -e "  ${CYAN}[4/6]${NC} Adding to PATH..."
+# ── Symlinks in PATH ─────────────────────────────────────────────
+echo -e "  ${CYAN}[5/7]${NC} Adding to PATH..."
 
 ln -sf "$INSTALL_DIR/TypeKeep" "$BIN_DIR/typekeep"
-echo "         Command 'typekeep' symlinked to $BIN_DIR/"
+echo "         'typekeep' → $BIN_DIR/typekeep"
 
 if [ "$COMPANION_INSTALLED" = true ]; then
     ln -sf "$INSTALL_DIR/$COMPANION_FILE" "$BIN_DIR/typekeep-companion"
-    echo "         Command 'typekeep-companion' symlinked to $BIN_DIR/"
+    echo "         'typekeep-companion' → $BIN_DIR/typekeep-companion"
 fi
 
-# Check if ~/.local/bin is in PATH
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-    echo -e "  ${YELLOW}NOTE:${NC} $BIN_DIR is not in your PATH."
-    echo "         Add this to your ~/.bashrc or ~/.zshrc:"
-    echo "         export PATH=\"\$HOME/.local/bin:\$PATH\""
+    echo -e "  ${YELLOW}NOTE:${NC} $BIN_DIR may not be in your PATH."
+    echo "         Add to ~/.bashrc or ~/.zshrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
 fi
 
-# ── Create .desktop entries ──────────────────────────────────────
-echo -e "  ${CYAN}[5/6]${NC} Creating desktop entries..."
+# ── Desktop entries ───────────────────────────────────────────────
+echo -e "  ${CYAN}[6/7]${NC} Creating desktop entries..."
 
 cat > "$HOME/.local/share/applications/typekeep.desktop" << EOF
 [Desktop Entry]
@@ -141,8 +144,8 @@ EOF
     echo "         typekeep-companion.desktop created."
 fi
 
-# ── Register autostart ───────────────────────────────────────────
-echo -e "  ${CYAN}[6/6]${NC} Registering auto-start..."
+# ── Autostart ─────────────────────────────────────────────────────
+echo -e "  ${CYAN}[7/7]${NC} Registering auto-start..."
 
 cat > "$HOME/.config/autostart/typekeep.desktop" << EOF
 [Desktop Entry]
@@ -158,40 +161,33 @@ echo "         TypeKeep will start automatically on login."
 cat > "$INSTALL_DIR/uninstall.sh" << 'UNINSTALL'
 #!/usr/bin/env bash
 echo "Removing TypeKeep..."
-
+read -r -p "Keep your data (typing history, config)? [Y/n] " KEEPDATA
 INSTALL_DIR="$HOME/.local/share/typekeep"
 BIN_DIR="$HOME/.local/bin"
-
-read -r -p "Keep your data (typing history, config)? [Y/n] " KEEPDATA
-
-# Remove symlinks
 rm -f "$BIN_DIR/typekeep" 2>/dev/null
 rm -f "$BIN_DIR/typekeep-companion" 2>/dev/null
-
-# Remove desktop entries
 rm -f "$HOME/.local/share/applications/typekeep.desktop" 2>/dev/null
 rm -f "$HOME/.local/share/applications/typekeep-companion.desktop" 2>/dev/null
-
-# Remove autostart
 rm -f "$HOME/.config/autostart/typekeep.desktop" 2>/dev/null
-
 if [[ "$KEEPDATA" =~ ^[Nn]$ ]]; then
     rm -rf "$INSTALL_DIR"
 else
     rm -f "$INSTALL_DIR/TypeKeep"
-    rm -f "$INSTALL_DIR"/TypeKeep-Companion*.AppImage
-    rm -f "$INSTALL_DIR"/TypeKeep_Companion*.AppImage
+    find "$INSTALL_DIR" -maxdepth 1 -name "*.AppImage" -delete 2>/dev/null
+    rm -f "$INSTALL_DIR/uninstall.sh"
     echo "Data kept in $INSTALL_DIR/data"
 fi
-
 echo "TypeKeep uninstalled."
 UNINSTALL
 chmod +x "$INSTALL_DIR/uninstall.sh"
 
+# ── Cleanup temp ─────────────────────────────────────────────────
+rm -rf "$TMPDIR_INST"
+
 # ── Done ─────────────────────────────────────────────────────────
 echo ""
-echo -e "${GREEN}============================================================${NC}"
-echo -e "${GREEN}     Installation complete!${NC}"
+echo -e "${GREEN}${BOLD}============================================================${NC}"
+echo -e "${GREEN}${BOLD}     Installation complete!${NC}"
 echo -e "${GREEN}============================================================${NC}"
 echo ""
 echo "  TypeKeep:           $INSTALL_DIR/TypeKeep"
@@ -213,7 +209,9 @@ if [[ ! "$LAUNCH" =~ ^[Nn]$ ]]; then
     if [ "$COMPANION_INSTALLED" = true ]; then
         nohup "$INSTALL_DIR/$COMPANION_FILE" --no-sandbox > /dev/null 2>&1 &
     fi
-    echo "  Both apps launched!"
+    echo "  Done!"
 fi
 
 echo ""
+exit 0
+__PAYLOAD_BEGINS__
