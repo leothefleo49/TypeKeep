@@ -73,6 +73,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # ── Build single NSIS installer ──
+      - name: Install NSIS
+        run: choco install nsis -y
+
       - name: Prepare NSIS build directory
         run: |
           New-Item -ItemType Directory -Path nsis-build -Force
@@ -83,7 +86,7 @@ jobs:
 
       - name: Build NSIS installer
         run: |
-          makensis nsis-build/typekeep.nsi
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" nsis-build/typekeep.nsi
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
