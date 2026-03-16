@@ -1,4 +1,4 @@
-"""TypeKeep Clipboard Monitor – tracks clipboard changes (text, images, files).
+"""TypeKeep Clipboard Monitor - tracks clipboard changes (text, images, files).
 
 Uses the Windows clipboard API via ctypes (no extra dependencies).
 Detected changes are stored in the database clipboard_entries table.
@@ -7,7 +7,6 @@ Detected changes are stored in the database clipboard_entries table.
 import ctypes
 import ctypes.wintypes
 import hashlib
-import io
 import json
 import os
 import platform
@@ -16,7 +15,6 @@ import time
 
 _IS_WINDOWS = platform.system() == 'Windows'
 
-# ── Windows clipboard formats ──────────────────────────────────
 CF_TEXT = 1
 CF_BITMAP = 2
 CF_UNICODETEXT = 13
@@ -56,7 +54,6 @@ if _IS_WINDOWS:
 
 
 def _active_window_info():
-    """Return (title, process) of the foreground window."""
     try:
         from recorder import _get_active_window_info
         return _get_active_window_info()
@@ -78,11 +75,9 @@ class ClipboardMonitor:
         os.makedirs(CLIPS_DIR, exist_ok=True)
 
     def set_broadcast_fn(self, fn):
-        """Set the SSE broadcast function for real-time notifications."""
         self._broadcast_fn = fn
 
     def _notify_copied(self, content_type, preview=''):
-        """Broadcast a 'copied' event to all connected UI clients."""
         if self._broadcast_fn:
             try:
                 self._broadcast_fn('clipboard_copied', {
@@ -93,15 +88,12 @@ class ClipboardMonitor:
             except Exception:
                 pass
 
-    # ── Lifecycle ──────────────────────────────────────────────
-
     def start(self):
         if not _IS_WINDOWS:
             return
         if not self.config.get('record_clipboard', True):
             return
         self._running = True
-        # Capture current seq so we don't store whatever is already on the clipboard
         try:
             self._last_seq = _user32.GetClipboardSequenceNumber()
         except Exception:
@@ -112,8 +104,6 @@ class ClipboardMonitor:
 
     def stop(self):
         self._running = False
-
-    # ── Main loop ──────────────────────────────────────────────
 
     def _poll_loop(self):
         while self._running:
@@ -127,10 +117,9 @@ class ClipboardMonitor:
                 self._last_seq = seq
             except Exception:
                 pass
-            time.sleep(1)
+            time.sleep(0.5)
 
     def _read_clipboard(self):
-        """Open clipboard, detect format, and delegate."""
         try:
             if not _user32.OpenClipboard(0):
                 return
@@ -148,8 +137,6 @@ class ClipboardMonitor:
                 _user32.CloseClipboard()
             except Exception:
                 pass
-
-    # ── Format handlers ────────────────────────────────────────
 
     def _handle_text(self):
         handle = _user32.GetClipboardData(CF_UNICODETEXT)
@@ -189,7 +176,6 @@ class ClipboardMonitor:
             filepath = os.path.join(CLIPS_DIR, filename)
             img.save(filepath, 'PNG')
 
-            # Thumbnail
             thumb_filename = f'thumb_{ts}.png'
             thumb_path = os.path.join(CLIPS_DIR, thumb_filename)
             thumb = img.copy()
@@ -218,7 +204,6 @@ class ClipboardMonitor:
                 }),
             )
             self._notify_copied('image', f'{img.width}x{img.height} image')
-            )
         except Exception:
             pass
 

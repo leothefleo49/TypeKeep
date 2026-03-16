@@ -1,37 +1,51 @@
-"""TypeKeep Database - SQLite storage with buffered writes, context-aware grouping,
-cursor-position-aware text reconstruction, macros, import/export."""
+"""TypeKeep Database - Crash-safe SQLite storage with WAL, buffered writes,
+context-aware grouping, cursor-position-aware text reconstruction, macros,
+auto-backup, and import/export."""
 
 import sqlite3
 import threading
 import time
 import json
 import os
+import shutil
+import glob as _glob
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 DB_FILE = os.path.join(DATA_DIR, 'typekeep.db')
+BACKUP_DIR = os.path.join(DATA_DIR, 'backups')
+WAL_FILE = os.path.join(DATA_DIR, 'typekeep.db-wal')
+
+MAX_BACKUPS = 5
+BACKUP_INTERVAL_SEC = 3600
 
 
 class Database:
-    """Thread-safe SQLite database with WAL mode and buffered inserts."""
+    """Thread-safe SQLite database with WAL mode, crash-safe buffered inserts,
+    and automatic rotating backups."""
 
     def __init__(self):
         os.makedirs(DATA_DIR, exist_ok=True)
+        os.makedirs(BACKUP_DIR, exist_ok=True)
         self._local = threading.local()
         self._buffer = []
         self._buffer_lock = threading.Lock()
+        self._last_backup = 0
         self._init_db()
 
     # ── Connection ─────────────────────────────────────────────
 
     def _get_conn(self):
         if not hasattr(self._local, 'conn') or self._local.conn is None:
-            conn = sqlite3.connect(DB_FILE, timeout=15)
+            conn = sqlite3.connect(DB_FILE, timeout=30)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA cache_size=-8000")
+            conn.execute("PRAGMA synchronous=FULL")
+            conn.execute("PRAGMA wal_autocheckpoint=100")
+            conn.execute("PRAGMA cache_size=-16000")
             conn.execute("PRAGMA temp_store=MEMORY")
+            conn.execute("PRAGMA busy_timeout=10000")
+            conn.execute("PRAGMA foreign_keys=ON")
             self._local.conn = conn
         return self._local.conn
 
@@ -88,21 +102,33 @@ class Database:
                 clipboard_sync INTEGER DEFAULT 0,
                 created_at REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS app_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
         """)
         conn.commit()
 
-    # ── Buffered writes ────────────────────────────────────────
+    # ── Buffered writes (crash-safe) ───────────────────────────
 
     def buffer_event(self, event: dict):
         with self._buffer_lock:
             self._buffer.append(event)
+            if len(self._buffer) >= 50:
+                self._flush_locked()
 
     def flush_buffer(self):
         with self._buffer_lock:
-            if not self._buffer:
-                return
-            batch = list(self._buffer)
-            self._buffer.clear()
+            self._flush_locked()
+
+    def _flush_locked(self):
+        """Must be called while holding _buffer_lock."""
+        if not self._buffer:
+            return
+        batch = list(self._buffer)
+        self._buffer.clear()
+
         conn = self._get_conn()
         try:
             conn.executemany(
@@ -117,6 +143,69 @@ class Database:
             conn.commit()
         except Exception as exc:
             print(f"[TypeKeep] DB flush error: {exc}")
+            with self._buffer_lock:
+                self._buffer = batch + self._buffer
+
+    # ── Auto-backup ────────────────────────────────────────────
+
+    def maybe_backup(self):
+        now = time.time()
+        if now - self._last_backup < BACKUP_INTERVAL_SEC:
+            return
+        self._last_backup = now
+        try:
+            ts = time.strftime('%Y%m%d_%H%M%S')
+            dst = os.path.join(BACKUP_DIR, f'typekeep_{ts}.db')
+            conn = self._get_conn()
+            backup_conn = sqlite3.connect(dst)
+            conn.backup(backup_conn)
+            backup_conn.close()
+            self._prune_backups()
+        except Exception as exc:
+            print(f"[TypeKeep] Backup error: {exc}")
+
+    def _prune_backups(self):
+        files = sorted(_glob.glob(os.path.join(BACKUP_DIR, 'typekeep_*.db')))
+        while len(files) > MAX_BACKUPS:
+            try:
+                os.remove(files.pop(0))
+            except OSError:
+                pass
+
+    def restore_from_backup(self, backup_path=None):
+        """Restore from the latest backup or a specific file."""
+        if not backup_path:
+            files = sorted(_glob.glob(os.path.join(BACKUP_DIR, 'typekeep_*.db')))
+            if not files:
+                return False
+            backup_path = files[-1]
+
+        if not os.path.exists(backup_path):
+            return False
+
+        self.close()
+        try:
+            shutil.copy2(backup_path, DB_FILE)
+        except Exception as exc:
+            print(f"[TypeKeep] Restore error: {exc}")
+            return False
+        self._local = threading.local()
+        self._init_db()
+        return True
+
+    # ── App metadata (version tracking, etc.) ──────────────────
+
+    def get_meta(self, key, default=None):
+        conn = self._get_conn()
+        row = conn.execute("SELECT value FROM app_meta WHERE key=?", (key,)).fetchone()
+        return row['value'] if row else default
+
+    def set_meta(self, key, value):
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO app_meta (key, value) VALUES (?,?)",
+            (key, str(value)))
+        conn.commit()
 
     # ── Raw event queries ──────────────────────────────────────
 
@@ -143,6 +232,18 @@ class Database:
             sql += f" LIMIT {int(limit)}"
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
+    def get_event_count(self, start_time=None, end_time=None, event_type=None):
+        conn = self._get_conn()
+        clauses, params = ["1=1"], []
+        if start_time is not None:
+            clauses.append("timestamp >= ?"); params.append(start_time)
+        if end_time is not None:
+            clauses.append("timestamp <= ?"); params.append(end_time)
+        if event_type:
+            clauses.append("event_type = ?"); params.append(event_type)
+        sql = f"SELECT COUNT(*) c FROM events WHERE {' AND '.join(clauses)}"
+        return conn.execute(sql, params).fetchone()['c']
+
     # ── Context-aware message grouping ─────────────────────────
 
     def get_messages(self, gap_seconds=5, same_window_gap=30,
@@ -151,15 +252,6 @@ class Database:
                      sort='newest', limit=50, offset=0,
                      split_on_enter=False, context_aware=True,
                      smart_enter=True):
-        """Group key_press events into messages using context-aware grouping.
-
-        Context-aware mode (default) adapts gap thresholds dynamically:
-        - Same app + same text field → very tolerant (up to same_window_gap)
-        - Same app, different window/field → moderate gap
-        - Different app → strict gap (base_gap)
-        - Considers typing speed, burst patterns, navigation keys
-        - Smart Enter: consecutive Enter keys in list-like patterns stay grouped
-        """
         events = self.get_events(start_time, end_time, 'key_press', process)
         groups = self._group_events_context_aware(
             events, gap_seconds, same_window_gap,
@@ -188,7 +280,6 @@ class Database:
 
     @staticmethod
     def _is_navigation_key(key_name):
-        """Return True if key is a navigation/control key (not character input)."""
         kn = (key_name or '').lower().replace('key.', '')
         nav_keys = {'left', 'right', 'up', 'down', 'home', 'end',
                     'page_up', 'page_down', 'tab', 'escape', 'esc',
@@ -199,7 +290,6 @@ class Database:
 
     @staticmethod
     def _is_text_input_key(event):
-        """Return True if event produces text output (character, space, enter)."""
         ch = event.get('character')
         kn = (event.get('key_name') or '').lower()
         mods = (event.get('modifiers') or '').lower()
@@ -211,7 +301,6 @@ class Database:
 
     @staticmethod
     def _compute_typing_speed(events, window=10):
-        """Compute chars-per-second over the last `window` text-input events."""
         text_events = [e for e in events if Database._is_text_input_key(e)]
         if len(text_events) < 2:
             return 0.0
@@ -220,20 +309,13 @@ class Database:
             return 0.0
         dt = recent[-1]['timestamp'] - recent[0]['timestamp']
         if dt <= 0:
-            return 999.0  # instantaneous burst
+            return 999.0
         return len(recent) / dt
 
     @staticmethod
     def _looks_like_list_entry(events_before_enter, events_after_enter):
-        """Detect list-like patterns: text → Enter → text → Enter ...
-
-        Returns True if the text around Enter keys looks like a list being
-        typed (e.g., bullet points, numbered items, short lines).
-        """
         if not events_after_enter:
             return False
-
-        # Count text chars before this Enter
         chars_before = 0
         for e in reversed(events_before_enter):
             kn = (e.get('key_name') or '').lower()
@@ -241,14 +323,12 @@ class Database:
                 break
             if e.get('character') or 'space' in kn:
                 chars_before += 1
-        # Short lines (< 120 chars) followed by another Enter → list pattern
         if 1 <= chars_before <= 120:
             return True
         return False
 
     @staticmethod
     def _count_consecutive_enters(events, start_idx):
-        """Count how many consecutive Enter keys appear starting at start_idx."""
         count = 0
         for i in range(start_idx, len(events)):
             kn = (events[i].get('key_name') or '').lower()
@@ -260,15 +340,6 @@ class Database:
 
     def _group_events_context_aware(self, events, base_gap, same_window_gap,
                                     split_on_enter, context_aware, smart_enter):
-        """Advanced context-aware splitting.
-
-        Factors considered:
-        1. App (process) change → always split
-        2. Window title change → split if time gap > moderate threshold
-        3. Time gap → adaptive based on typing speed and context
-        4. Enter key → smart detection of list vs paragraph boundary
-        5. Mouse click between keys → likely moved to different text field
-        """
         if not events:
             return []
 
@@ -285,62 +356,46 @@ class Database:
 
             should_split = False
 
-            # --- Enter key splitting ---
             last_kn = (last.get('key_name') or '').lower()
             is_enter = 'enter' in last_kn or 'return' in last_kn
 
             if is_enter and split_on_enter:
                 if smart_enter and context_aware:
-                    # Smart enter: don't split if it looks like a list
                     consecutive = self._count_consecutive_enters(events, idx - 1)
-                    # Only 1 enter and text follows → could be list item
                     if consecutive == 1:
                         before_slice = group[:-1] if len(group) > 1 else group
                         after_slice = events[idx:idx + 5]
                         if self._looks_like_list_entry(before_slice, after_slice):
-                            # List pattern detected — keep grouped
                             group.append(ev)
                             continue
-                    # Multiple blank enters (2+) → paragraph break, split
                     if consecutive >= 2:
                         should_split = True
                 else:
-                    # Dumb split: every enter splits
                     should_split = True
 
             if not should_split and context_aware:
-                # --- App change (always split) ---
                 if not same_proc:
                     should_split = True
-                # --- Same app, different window title ---
                 elif same_proc and not same_title:
-                    # Moderate threshold: half the same-window gap
                     moderate_gap = max(base_gap, same_window_gap * 0.4)
                     if dt > moderate_gap:
                         should_split = True
                     else:
-                        # Title changed but very quick → might be autocomplete,
-                        # tab title update, etc. Keep together if fast typing.
                         speed = self._compute_typing_speed(group)
                         if speed < 1.0 and dt > base_gap:
                             should_split = True
-                # --- Same app, same window ---
                 elif same_proc and same_title:
-                    # Adaptive gap based on typing speed
                     speed = self._compute_typing_speed(group)
                     if speed > 3.0:
-                        # Fast typist → more tolerant gap
                         effective_gap = same_window_gap * 1.5
                     elif speed > 1.0:
                         effective_gap = same_window_gap
                     else:
-                        # Slow typing or navigation → tighter gap
                         effective_gap = same_window_gap * 0.7
 
                     if dt > effective_gap:
                         should_split = True
             elif not should_split:
-                # Legacy mode: simple gap-based splitting
                 same_win = same_proc and same_title
                 if same_win:
                     if dt > same_window_gap:
@@ -394,46 +449,162 @@ class Database:
 
     @staticmethod
     def _reconstruct_final(events):
-        """Rebuild text with cursor-position-aware editing (backspace, arrows, etc.)."""
+        """Rebuild text with cursor-position-aware editing.
+
+        Handles: regular chars, backspace, delete, arrow keys, Home, End,
+        Ctrl+Home, Ctrl+End (jump to start/end of buffer), Ctrl+A (select all
+        then next char replaces), and proper multiline Home/End behavior.
+        """
         buf = []
         cur = 0
+        select_all = False
+
         for e in events:
             mods = (e.get('modifiers') or '').lower()
-            if 'ctrl' in mods or 'alt' in mods:
-                continue
             ch = e.get('character')
             kn = (e.get('key_name') or '').lower()
 
+            has_ctrl = 'ctrl' in mods
+            has_alt = 'alt' in mods
+
+            if has_ctrl and not has_alt:
+                if ch and ch.lower() == 'a':
+                    select_all = True
+                    continue
+                if ch and ch.lower() in ('c', 'v', 'x', 'z', 'y', 's', 'f', 'h'):
+                    if ch.lower() == 'v':
+                        pass
+                    continue
+
+                if 'home' in kn:
+                    cur = 0
+                    continue
+                if 'end' in kn:
+                    cur = len(buf)
+                    continue
+
+                if 'backspace' in kn:
+                    if select_all:
+                        buf.clear()
+                        cur = 0
+                        select_all = False
+                        continue
+                    line_start = cur
+                    while line_start > 0 and buf[line_start - 1] != '\n':
+                        line_start -= 1
+                    buf[line_start:cur] = []
+                    cur = line_start
+                    continue
+
+                if 'delete' in kn:
+                    if select_all:
+                        buf.clear()
+                        cur = 0
+                        select_all = False
+                        continue
+                    line_end = cur
+                    while line_end < len(buf) and buf[line_end] != '\n':
+                        line_end += 1
+                    buf[cur:line_end] = []
+                    continue
+
+                continue
+
+            if has_alt:
+                continue
+
+            if select_all and ch and len(ch) == 1:
+                buf.clear()
+                cur = 0
+                select_all = False
+
             if ch and len(ch) == 1:
-                buf.insert(cur, ch); cur += 1
+                buf.insert(cur, ch)
+                cur += 1
             elif 'backspace' in kn:
-                if cur > 0:
-                    cur -= 1; buf.pop(cur)
-            elif 'space' in kn:
-                buf.insert(cur, ' '); cur += 1
-            elif 'enter' in kn or 'return' in kn:
-                buf.insert(cur, '\n'); cur += 1
-            elif 'tab' in kn:
-                buf.insert(cur, '\t'); cur += 1
-            elif kn == 'key.delete' or kn == 'delete':
-                if cur < len(buf):
+                if select_all:
+                    buf.clear()
+                    cur = 0
+                    select_all = False
+                elif cur > 0:
+                    cur -= 1
                     buf.pop(cur)
-            elif 'left' in kn and 'alt' not in kn:
-                if cur > 0: cur -= 1
-            elif 'right' in kn and 'alt' not in kn:
-                if cur < len(buf): cur += 1
+            elif 'space' in kn and 'backspace' not in kn:
+                if select_all:
+                    buf.clear()
+                    cur = 0
+                    select_all = False
+                buf.insert(cur, ' ')
+                cur += 1
+            elif 'enter' in kn or 'return' in kn:
+                if select_all:
+                    buf.clear()
+                    cur = 0
+                    select_all = False
+                buf.insert(cur, '\n')
+                cur += 1
+            elif 'tab' in kn and 'shift' not in kn:
+                buf.insert(cur, '\t')
+                cur += 1
+            elif kn in ('key.delete', 'delete'):
+                if select_all:
+                    buf.clear()
+                    cur = 0
+                    select_all = False
+                elif cur < len(buf):
+                    buf.pop(cur)
+            elif 'left' in kn:
+                select_all = False
+                if cur > 0:
+                    cur -= 1
+            elif 'right' in kn:
+                select_all = False
+                if cur < len(buf):
+                    cur += 1
             elif 'home' in kn:
-                # move to start of line
-                while cur > 0 and (cur <= len(buf) and buf[cur - 1] != '\n'):
+                select_all = False
+                while cur > 0 and buf[cur - 1] != '\n':
                     cur -= 1
             elif 'end' in kn:
+                select_all = False
                 while cur < len(buf) and buf[cur] != '\n':
                     cur += 1
+            elif 'up' in kn:
+                select_all = False
+                line_start = cur
+                while line_start > 0 and buf[line_start - 1] != '\n':
+                    line_start -= 1
+                col = cur - line_start
+                if line_start > 0:
+                    prev_line_end = line_start - 1
+                    prev_line_start = prev_line_end
+                    while prev_line_start > 0 and buf[prev_line_start - 1] != '\n':
+                        prev_line_start -= 1
+                    prev_line_len = prev_line_end - prev_line_start
+                    cur = prev_line_start + min(col, prev_line_len)
+            elif 'down' in kn:
+                select_all = False
+                line_start = cur
+                while line_start > 0 and buf[line_start - 1] != '\n':
+                    line_start -= 1
+                col = cur - line_start
+                line_end = cur
+                while line_end < len(buf) and buf[line_end] != '\n':
+                    line_end += 1
+                if line_end < len(buf):
+                    next_line_start = line_end + 1
+                    next_line_end = next_line_start
+                    while next_line_end < len(buf) and buf[next_line_end] != '\n':
+                        next_line_end += 1
+                    next_line_len = next_line_end - next_line_start
+                    cur = next_line_start + min(col, next_line_len)
+            else:
+                select_all = False
+
         return ''.join(buf)
 
     @staticmethod
     def _reconstruct_raw(events):
-        """Show every keystroke with symbols for special keys."""
         parts = []
         for e in events:
             mods = (e.get('modifiers') or '').lower()
@@ -443,8 +614,10 @@ class Database:
 
             if 'ctrl' in mods or 'alt' in mods:
                 prefix = ''
-                if 'ctrl' in mods: prefix += 'Ctrl+'
-                if 'alt' in mods: prefix += 'Alt+'
+                if 'ctrl' in mods:
+                    prefix += 'Ctrl+'
+                if 'alt' in mods:
+                    prefix += 'Alt+'
                 parts.append(f'[{prefix}{kn}]')
                 continue
 
@@ -485,7 +658,6 @@ class Database:
 
     @staticmethod
     def _reconstruct_chronological(events):
-        """One-line-per-keystroke view with timestamps."""
         lines = []
         for e in events:
             ts = time.strftime('%H:%M:%S', time.localtime(e['timestamp']))
@@ -502,7 +674,6 @@ class Database:
 
     def get_activity(self, start_time=None, end_time=None,
                      event_types=None, limit=200):
-        """Return non-key events (clicks, moves, shortcuts, notifications)."""
         conn = self._get_conn()
         clauses = ["event_type != 'key_press'"]
         params = []
@@ -539,6 +710,7 @@ class Database:
         db_size = 0
         if os.path.exists(DB_FILE):
             db_size = round(os.path.getsize(DB_FILE) / (1024 * 1024), 2)
+        backup_count = len(_glob.glob(os.path.join(BACKUP_DIR, 'typekeep_*.db')))
         return {
             'total_events': total,
             'events_24h': today,
@@ -547,6 +719,7 @@ class Database:
             'total_shortcuts': shortcuts,
             'oldest_event': oldest,
             'db_size_mb': db_size,
+            'backup_count': backup_count,
         }
 
     def get_apps(self, start_time=None, end_time=None):
@@ -633,8 +806,14 @@ class Database:
     def export_data(self, start_time=None, end_time=None):
         events = self.get_events(start_time, end_time)
         macros = self.get_macros()
-        return {'events': events, 'macros': macros,
-                'exported_at': time.time(), 'version': 2}
+        clipboard, _ = self.get_clipboard(limit=10000)
+        return {
+            'events': events,
+            'macros': macros,
+            'clipboard': clipboard,
+            'exported_at': time.time(),
+            'version': 3,
+        }
 
     def import_data(self, data, merge=True):
         conn = self._get_conn()
@@ -826,5 +1005,9 @@ class Database:
 
     def close(self):
         if hasattr(self._local, 'conn') and self._local.conn:
+            try:
+                self._local.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
             self._local.conn.close()
             self._local.conn = None

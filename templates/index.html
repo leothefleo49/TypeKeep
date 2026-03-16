@@ -22,6 +22,7 @@
       <input type="text" id="search-input" placeholder="Search history..." autocomplete="off" spellcheck="false">
     </div>
     <div class="topbar-right">
+      <span class="version-badge" id="version-badge" title="TypeKeep version"></span>
       <button id="status-btn" class="status-btn recording" onclick="toggleRecording()">
         <span class="status-dot"></span>
         <span class="status-label">Recording</span>
@@ -106,8 +107,14 @@
             <div class="cs-option" data-value="chrono">Chronological</div>
           </div>
         </div>
-        <button class="btn-ghost-sm" id="filter-split-enter" onclick="toggleFilterSplitEnter()" title="Split on Enter key">↵ Split Enter</button>
-        <button class="btn-ghost-sm active" id="filter-context-aware" onclick="toggleFilterContextAware()" title="Context-aware grouping">🧠 Context</button>
+        <button class="btn-ghost-sm" id="filter-split-enter" onclick="toggleFilterSplitEnter()" title="Split on Enter key">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 01-4 4H4"/></svg>
+          Split Enter
+        </button>
+        <button class="btn-ghost-sm active" id="filter-context-aware" onclick="toggleFilterContextAware()" title="Context-aware grouping">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          Context
+        </button>
       </div>
       <div class="filter-actions">
         <button class="btn-danger-sm" onclick="openDeleteModal()" title="Delete data">
@@ -130,7 +137,9 @@
       <button class="btn-accent" onclick="loadMore()">Load More</button>
     </div>
     <div id="empty-state" class="empty-state" style="display:none">
-      <div class="empty-icon">&#128221;</div>
+      <div class="empty-icon">
+        <svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 10h36M6 20h28M6 30h32M6 40h20"/></svg>
+      </div>
       <h3>No messages found</h3>
       <p>Start typing anywhere &mdash; your keystrokes will appear here.</p>
     </div>
@@ -176,7 +185,9 @@
       <button class="btn-accent" onclick="loadMoreClipboard()">Load More</button>
     </div>
     <div id="clipboard-empty" class="empty-state" style="display:none">
-      <div class="empty-icon">&#128203;</div>
+      <div class="empty-icon">
+        <svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="10" y="4" width="28" height="40" rx="4"/><path d="M18 4v4h12V4"/><line x1="16" y1="18" x2="32" y2="18"/><line x1="16" y1="26" x2="28" y2="26"/><line x1="16" y1="34" x2="24" y2="34"/></svg>
+      </div>
       <h3>No clipboard entries</h3>
       <p>Copy text, images, or files &mdash; they'll appear here automatically.</p>
     </div>
@@ -209,7 +220,9 @@
     </section>
     <main id="activity-list" class="activity-list"></main>
     <div id="activity-empty" class="empty-state" style="display:none">
-      <div class="empty-icon">&#128065;</div>
+      <div class="empty-icon">
+        <svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="24" cy="24" r="20"/><circle cx="24" cy="24" r="8"/><circle cx="24" cy="24" r="2" fill="currentColor"/></svg>
+      </div>
       <h3>No activity recorded yet</h3>
       <p>Mouse clicks, shortcuts, and notifications will appear here.</p>
     </div>
@@ -226,7 +239,9 @@
     </div>
     <main id="macro-list" class="macro-list"></main>
     <div id="macros-empty" class="empty-state" style="display:none">
-      <div class="empty-icon">&#9889;</div>
+      <div class="empty-icon">
+        <svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="24 4 29 18 44 18 31 28 36 42 24 32 12 42 17 28 4 18 19 18"/></svg>
+      </div>
       <h3>No macros yet</h3>
       <p>Click "+ New Macro" to create your first automation.</p>
     </div>
@@ -242,7 +257,9 @@
       <!-- This Device -->
       <div class="device-card self-device">
         <div class="device-card-header">
-          <span class="device-icon">&#128187;</span>
+          <span class="device-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="var(--accent)" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          </span>
           <div class="device-info">
             <span class="device-name" id="my-device-name">This Device</span>
             <span class="device-id" id="my-device-id"></span>
@@ -274,7 +291,9 @@
       <h3 style="margin-top:20px">Paired Devices</h3>
       <main id="device-list" class="device-list"></main>
       <div id="devices-empty" class="empty-state" style="display:none">
-        <div class="empty-icon">&#128279;</div>
+        <div class="empty-icon">
+          <svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="8" width="18" height="14" rx="2"/><rect x="26" y="26" width="18" height="14" rx="2"/><path d="M22 15h4v18h-4"/></svg>
+        </div>
         <h3>No paired devices</h3>
         <p>Pair with another TypeKeep instance to sync data across devices.</p>
       </div>
@@ -375,7 +394,7 @@
         <p class="hint">Permanently delete all recorded events. This cannot be undone.</p>
       </fieldset>
       <fieldset>
-        <legend>☁️ Cloud Sync</legend>
+        <legend>Cloud Sync</legend>
         <p class="hint" style="margin-bottom:10px">Sync clipboard &amp; history across all your devices (desktop, Android, iOS). Just pick a sync key and enable it!</p>
         <div class="field"><label>Sync Key (shared passphrase — same on all devices)</label><input type="text" id="s-cloud-key" placeholder="pick-any-passphrase"></div>
         <div class="field-check"><input type="checkbox" id="s-cloud-enabled"><label for="s-cloud-enabled">Enable cloud sync</label></div>
@@ -383,7 +402,7 @@
         <div class="field-check"><input type="checkbox" id="s-cloud-messages" checked><label for="s-cloud-messages">Sync typing history to cloud</label></div>
         <button class="btn-ghost-sm" onclick="testCloudConnection()" style="margin-top:6px">Test Connection</button>
         <span id="cloud-test-result" style="font-size:12px;margin-left:8px"></span>
-        <p class="hint" style="margin-top:8px">📱 <strong>Phone app:</strong> Open <a href="/mobile" target="_blank" style="color:var(--accent)">on this device</a> or <a href="https://leothefleo49.github.io/TypeKeep/" target="_blank" style="color:var(--accent)">leothefleo49.github.io/TypeKeep</a> on your phone, then enter the same sync key.</p>
+        <p class="hint" style="margin-top:8px"><strong>Phone app:</strong> Open <a href="/mobile" target="_blank" style="color:var(--accent)">on this device</a> or <a href="https://leothefleo49.github.io/TypeKeep/" target="_blank" style="color:var(--accent)">leothefleo49.github.io/TypeKeep</a> on your phone, then enter the same sync key.</p>
         <details style="margin-top:8px">
           <summary style="cursor:pointer;font-size:12px;color:var(--txt-muted)">Advanced: Use your own Supabase</summary>
           <div class="field" style="margin-top:8px"><label>Supabase URL</label><input type="url" id="s-supa-url" placeholder="https://xxxxx.supabase.co" class="mono"></div>

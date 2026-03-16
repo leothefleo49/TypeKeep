@@ -1,11 +1,18 @@
-"""TypeKeep Configuration Manager - JSON-based persistent settings."""
+"""TypeKeep Configuration Manager - Atomic JSON-based persistent settings
+with backup on every save to prevent data loss."""
 
 import json
 import os
+import shutil
+import threading
+import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
+CONFIG_BACKUP = os.path.join(DATA_DIR, 'config.backup.json')
+
+APP_VERSION = '3.1.0'
 
 DEFAULTS = {
     # Recording
@@ -34,6 +41,7 @@ DEFAULTS = {
     'cleanup_interval_seconds': 3600,
     'buffer_flush_seconds': 1,
     'auto_save_interval': 1,
+    'auto_backup_enabled': True,
 
     # Startup
     'start_on_boot': True,
@@ -52,12 +60,7 @@ DEFAULTS = {
     'sync_key': '',
     'sync_enabled': False,
     'clipboard_sync': False,
-    'paired_devices': [],           # [{ id, name, ip, port, clipboard_sync }]
-
-    # Backup (stubs)
-    'backup_enabled': False,
-    'backup_service': 'none',        # none / gdrive / onedrive
-    'backup_interval_minutes': 60,
+    'paired_devices': [],
 
     # Cloud Sync (Supabase)
     'cloud_sync_enabled': False,
@@ -73,39 +76,65 @@ DEFAULTS = {
 
 
 class Config:
-    """Thread-safe JSON configuration with auto-persistence."""
+    """Thread-safe JSON configuration with atomic writes and auto-backup."""
 
     def __init__(self):
         os.makedirs(DATA_DIR, exist_ok=True)
         self._config = dict(DEFAULTS)
+        self._lock = threading.Lock()
         self._load()
 
     def _load(self):
+        loaded = False
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     saved = json.load(f)
                 self._config.update(saved)
+                loaded = True
+            except (json.JSONDecodeError, IOError, OSError):
+                pass
+
+        if not loaded and os.path.exists(CONFIG_BACKUP):
+            try:
+                with open(CONFIG_BACKUP, 'r', encoding='utf-8') as f:
+                    saved = json.load(f)
+                self._config.update(saved)
+                self._save()
             except (json.JSONDecodeError, IOError, OSError):
                 pass
 
     def _save(self):
         try:
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(self._config, f, indent=2)
+            tmp = CONFIG_FILE + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(self._config, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            shutil.move(tmp, CONFIG_FILE)
+            try:
+                shutil.copy2(CONFIG_FILE, CONFIG_BACKUP)
+            except Exception:
+                pass
         except (IOError, OSError) as e:
             print(f"[TypeKeep] Config save error: {e}")
 
     def get(self, key, default=None):
-        return self._config.get(key, default if default is not None else DEFAULTS.get(key))
+        with self._lock:
+            return self._config.get(key, default if default is not None else DEFAULTS.get(key))
 
     def set(self, key, value):
-        self._config[key] = value
-        self._save()
+        with self._lock:
+            self._config[key] = value
+            self._save()
 
     def update(self, data: dict):
-        self._config.update(data)
-        self._save()
+        with self._lock:
+            self._config.update(data)
+            self._save()
 
     def to_dict(self):
-        return dict(self._config)
+        with self._lock:
+            result = dict(self._config)
+            result['app_version'] = APP_VERSION
+            return result

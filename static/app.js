@@ -26,18 +26,26 @@ const S = {
   _onboardingStep: 0,
 };
 
-let _refreshTimer = null, _toastTimer = null;
+let _refreshTimer = null, _toastTimer = null, _eventSource = null;
 
 /* ── Boot ──────────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', async () => {
   restoreFilters();
   initCustomSelects();
   wireEvents();
-  await Promise.all([loadStatus(), loadStats(), loadApps(), loadSettings()]);
+  await Promise.all([loadStatus(), loadStats(), loadApps(), loadSettings(), loadVersion()]);
   await loadMessages();
   startRefresh();
   checkOnboarding();
 });
+
+async function loadVersion() {
+  try {
+    const d = await api('/api/version');
+    const badge = el('version-badge');
+    if (badge && d.version) badge.textContent = 'v' + d.version;
+  } catch (_) {}
+}
 
 /* ── API helper ────────────────────────────────────────────── */
 async function api(path, opts) {
@@ -296,12 +304,12 @@ function renderActivity() {
 
 function activityIcon(type) {
   switch (type) {
-    case 'mouse_click': return '\ud83d\uddb1\ufe0f';
-    case 'mouse_move': return '\u2194\ufe0f';
-    case 'mouse_scroll': return '\ud83d\uddd8\ufe0f';
-    case 'shortcut': return '\u2328\ufe0f';
-    case 'notification': return '\ud83d\udd14';
-    default: return '\ud83d\udcdd';
+    case 'mouse_click': return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2" width="12" height="20" rx="6"/><line x1="12" y1="6" x2="12" y2="10"/></svg>';
+    case 'mouse_move': return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="5 12 1 12"/><polyline points="23 12 19 12"/><polyline points="12 5 12 1"/><polyline points="12 23 12 19"/><circle cx="12" cy="12" r="4"/></svg>';
+    case 'mouse_scroll': return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>';
+    case 'shortcut': return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><line x1="6" y1="8" x2="6" y2="8"/><line x1="18" y1="16" x2="18" y2="16"/><line x1="6" y1="16" x2="18" y2="16"/></svg>';
+    case 'notification': return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>';
+    default: return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
   }
 }
 
@@ -328,7 +336,7 @@ function renderMacros() {
     const acts = (Array.isArray(m.actions) ? m.actions : []);
     const summary = acts.map(a => a.type).join(', ') || 'No actions';
     return `<div class="macro-card">
-      <div class="macro-icon">\u26a1</div>
+      <div class="macro-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
       <div class="macro-info">
         <div class="macro-name">${esc(m.name)}</div>
         <div class="macro-shortcut">${m.shortcut ? esc(m.shortcut) : 'No shortcut'} \u2022 ${esc(summary)}</div>
@@ -751,17 +759,22 @@ function updateGuide() {
    ONBOARDING
    ══════════════════════════════════════════════════════════════ */
 const OB_STEPS = [
-  { icon: '\u2328\ufe0f', title: 'Welcome to TypeKeep!',
+  { icon: '<svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="var(--accent)" stroke-width="2"><rect x="4" y="12" width="40" height="28" rx="4"/><line x1="12" y1="20" x2="20" y2="20"/><line x1="28" y1="20" x2="36" y2="20"/><line x1="12" y1="28" x2="36" y2="28"/><line x1="12" y1="34" x2="28" y2="34"/></svg>',
+    title: 'Welcome to TypeKeep!',
     body: 'TypeKeep silently records your keyboard, mouse, and shortcut activity in the background. Everything is stored locally on your device.' },
-  { icon: '\ud83d\udcbb', title: 'Runs in the Background',
-    body: 'TypeKeep lives in your system tray. You don\'t need to keep this window open — it records automatically. Right-click the teal T icon to pause or open the dashboard.' },
-  { icon: '\ud83d\udcc4', title: 'Smart Text History',
-    body: 'Your typing is grouped by context: same app, same window, with cursor-aware reconstruction. Backspaces, arrow keys, and corrections are handled — you see the <strong>final result</strong> by default.',
+  { icon: '<svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="var(--accent)" stroke-width="2"><rect x="8" y="6" width="32" height="36" rx="4"/><circle cx="24" cy="36" r="2"/><rect x="14" y="12" width="20" height="16" rx="2"/></svg>',
+    title: 'Runs in the Background',
+    body: 'TypeKeep lives in your system tray. You don\'t need to keep this window open \u2014 it records automatically. Right-click the teal T icon to pause or open the dashboard.' },
+  { icon: '<svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M6 10h36M6 20h28M6 30h32M6 40h20"/></svg>',
+    title: 'Smart Text History',
+    body: 'Your typing is grouped by context: same app, same window, with cursor-aware reconstruction. Backspaces, arrow keys, and corrections are handled \u2014 you see the <strong>final result</strong> by default.',
     features: ['Final text (corrected)', 'Raw keystrokes', 'Chronological view'] },
-  { icon: '\u26a1', title: 'Macros & Shortcuts',
-    body: 'Record and execute macros — automate key combinations like Ctrl+Shift+Esc (Task Manager) with one click. Build complex sequences with hotkeys, text, delays, and clicks.' },
-  { icon: '\ud83d\udee1\ufe0f', title: 'Your Data, Your Control',
-    body: 'Export/import your data anytime. Delete individual messages or clear everything. Set retention periods. All data stays local on your machine.' },
+  { icon: '<svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="var(--accent)" stroke-width="2"><polygon points="24 4 29 18 44 18 31 28 36 42 24 32 12 42 17 28 4 18 19 18"/></svg>',
+    title: 'Macros & Shortcuts',
+    body: 'Record and execute macros \u2014 automate key combinations like Ctrl+Shift+Esc (Task Manager) with one click. Build complex sequences with hotkeys, text, delays, and clicks.' },
+  { icon: '<svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="var(--accent)" stroke-width="2"><rect x="6" y="10" width="36" height="28" rx="4"/><path d="M24 18v12M18 24h12"/></svg>',
+    title: 'Your Data, Your Control',
+    body: 'Export/import your data anytime. Delete individual messages or clear everything. Set retention periods. All data stays local on your machine. Auto-backups protect against crashes.' },
 ];
 
 async function checkOnboarding() {
@@ -842,7 +855,7 @@ async function loadClipStats() {
   try {
     const d = await api('/api/clipboard/stats');
     const c = el('clip-stats');
-    if (c) c.innerHTML = `<span>📋 ${d.total} entries</span><span>📝 ${d.texts} text</span><span>🖼️ ${d.images} images</span><span>📁 ${d.files} files</span>`;
+    if (c) c.innerHTML = `<span>${d.total} entries</span><span>${d.texts} text</span><span>${d.images} images</span><span>${d.files} files</span>`;
   } catch (_) {}
 }
 
@@ -877,10 +890,10 @@ function clipCardHTML(e) {
       : '<span class="text-muted">Image (file missing)</span>';
   } else if (e.content_type === 'files') {
     const files = (e.content_text || '').split('\n').filter(Boolean);
-    content = `<div class="clip-files">${files.map(f => `<div class="clip-file-item">📄 ${esc(f.split('\\\\').pop().split('/').pop())}</div>`).join('')}</div>`;
+    content = `<div class="clip-files">${files.map(f => `<div class="clip-file-item">${esc(f.split('\\\\').pop().split('/').pop())}</div>`).join('')}</div>`;
   }
 
-  const typeIcon = e.content_type === 'text' ? '📝' : e.content_type === 'image' ? '🖼️' : '📁';
+  const typeIcon = e.content_type === 'text' ? 'TXT' : e.content_type === 'image' ? 'IMG' : 'FILE';
 
   return `<div class="clip-card${pinCls}" data-id="${e.id}">
     <div class="clip-header">
@@ -987,7 +1000,7 @@ function renderDevices() {
     const seen = d.last_seen ? fmtRelative(d.last_seen) : 'never';
     return `<div class="device-card">
       <div class="device-card-header">
-        <span class="device-icon">💻</span>
+        <span class="device-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="var(--accent)" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span>
         <div class="device-info">
           <span class="device-name">${esc(d.name)}</span>
           <span class="device-id">${esc(d.id)} • ${esc(d.ip_address || '?')}:${d.port || 7700}</span>
@@ -1161,11 +1174,10 @@ function startSSE() {
   _eventSource.addEventListener('clipboard_copied', (e) => {
     try {
       const data = JSON.parse(e.data);
-      const typeLabel = data.type === 'text' ? '📋' : data.type === 'image' ? '🖼️' : '📁';
-      toast(`${typeLabel} Copied${data.preview ? ': ' + data.preview.substring(0, 50) : ''}`);
+      toast(`Copied${data.preview ? ': ' + data.preview.substring(0, 50) : ''}`);
       if (S.activeTab === 'clipboard') loadClipboard();
     } catch (_) {
-      toast('📋 Copied');
+      toast('Copied to clipboard');
     }
   });
 
@@ -1276,15 +1288,19 @@ function safeJSON(s) {
 
 /* ── App icons ─────────────────────────────────────────────── */
 const APP_ICONS = {
-  'chrome.exe':'🌐','msedge.exe':'🌐','firefox.exe':'🦊','brave.exe':'🦁',
-  'opera.exe':'🌐','vivaldi.exe':'🌐','Code.exe':'💻','code.exe':'💻',
-  'discord.exe':'💬','Telegram.exe':'💬','slack.exe':'💬','Teams.exe':'💬',
-  'explorer.exe':'📁','notepad.exe':'📝','notepad++.exe':'📝',
-  'cmd.exe':'⚡','powershell.exe':'⚡','WindowsTerminal.exe':'⚡',
-  'WINWORD.EXE':'📄','EXCEL.EXE':'📊','POWERPNT.EXE':'📊',
-  'Spotify.exe':'🎵','vlc.exe':'🎬','steam.exe':'🎮',
+  'chrome.exe':'Cr','msedge.exe':'Ed','firefox.exe':'Ff','brave.exe':'Br',
+  'opera.exe':'Op','vivaldi.exe':'Vv','Code.exe':'VS','code.exe':'VS',
+  'discord.exe':'Dc','Telegram.exe':'Tg','slack.exe':'Sl','Teams.exe':'Tm',
+  'explorer.exe':'Ex','notepad.exe':'Np','notepad++.exe':'N+',
+  'cmd.exe':'Cm','powershell.exe':'PS','WindowsTerminal.exe':'Wt',
+  'WINWORD.EXE':'Wd','EXCEL.EXE':'Xl','POWERPNT.EXE':'Pp',
+  'Spotify.exe':'Sp','vlc.exe':'Vl','steam.exe':'St',
 };
-function appIcon(name) { return (name && APP_ICONS[name]) || '🖥️'; }
+function appIcon(name) {
+  const abbr = name && APP_ICONS[name];
+  if (abbr) return `<span class="app-icon-abbr">${abbr}</span>`;
+  return `<span class="app-icon-abbr">--</span>`;
+}
 
 /* ── SVGs ──────────────────────────────────────────────────── */
 const svgCopy = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>`;

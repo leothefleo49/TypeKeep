@@ -1,5 +1,6 @@
 """
-TypeKeep - lightweight local input logger & macro engine.
+TypeKeep - lightweight local input logger, clipboard manager, macro engine
+& cross-device sync.
 
 Run:  python typekeep.py
 Dashboard opens at http://127.0.0.1:7700
@@ -16,10 +17,9 @@ import threading
 import time
 import webbrowser
 
-# Ensure sibling modules are always importable regardless of how the script is launched
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import Config
+from config import Config, APP_VERSION
 from database import Database
 from recorder import Recorder
 from server import create_app
@@ -45,36 +45,39 @@ def main():
             webbrowser.open(f'http://127.0.0.1:{port}')
         sys.exit(0)
 
-    # Enable start on boot by default on first run
     if config.get('show_onboarding', True) and config.get('start_on_boot', True):
         try:
             import platform
             if platform.system() == 'Windows':
-                import os, winreg
+                import winreg
                 key = winreg.OpenKey(
                     winreg.HKEY_CURRENT_USER,
                     r"Software\Microsoft\Windows\CurrentVersion\Run",
                     0, winreg.KEY_SET_VALUE)
+                exe = sys.executable
                 script = os.path.abspath(os.path.join(
                     os.path.dirname(__file__), 'typekeep.py'))
+                if exe.lower().endswith('python.exe'):
+                    exe = exe.replace('python.exe', 'pythonw.exe')
                 winreg.SetValueEx(key, 'TypeKeep', 0, winreg.REG_SZ,
-                                  f'pythonw "{script}" --background')
+                                  f'"{exe}" "{script}" --background')
                 winreg.CloseKey(key)
         except Exception as exc:
             print(f"[TypeKeep] Auto-startup setup: {exc}")
 
     db = Database()
+    db.set_meta('last_version', APP_VERSION)
+    db.set_meta('last_launch', str(time.time()))
+
     recorder = Recorder(db, config)
     clipboard = ClipboardMonitor(db, config)
     cloud = CloudSync(db, config)
     app = create_app(db, recorder, config, cloud)
 
-    # Wire clipboard monitor to SSE broadcast
     clipboard.set_broadcast_fn(app.broadcast_sse)
 
-    # Flask in background thread
     threading.Thread(
-        target=lambda: app.run(host='127.0.0.1', port=port,
+        target=lambda: app.run(host='0.0.0.0', port=port,
                                debug=False, use_reloader=False, threaded=True),
         daemon=True, name='flask-server',
     ).start()
@@ -83,7 +86,6 @@ def main():
     clipboard.start()
     cloud.start()
 
-    # Periodic flush & cleanup (crash-resistant: flush every 1s)
     def _periodic():
         flush_sec = config.get('buffer_flush_seconds', 1)
         cleanup_interval = config.get('cleanup_interval_seconds', 3600)
@@ -93,7 +95,6 @@ def main():
             try:
                 db.flush_buffer()
                 now = time.time()
-                # Broadcast update to SSE clients every 2s
                 if now - last_broadcast >= 2:
                     try:
                         app.broadcast_sse('update', {'ts': now})
@@ -104,6 +105,8 @@ def main():
                     db.cleanup(config.get('retention_days', 30))
                     db.cleanup_clipboard(config.get('clipboard_retention_days', 30))
                     last_cleanup = now
+                if config.get('auto_backup_enabled', True):
+                    db.maybe_backup()
             except Exception as exc:
                 print(f"[TypeKeep] periodic error: {exc}")
             time.sleep(flush_sec)
@@ -111,19 +114,18 @@ def main():
     threading.Thread(target=_periodic, daemon=True, name='flush').start()
 
     print("=" * 48)
-    print("  TypeKeep is running")
+    print(f"  TypeKeep v{APP_VERSION} is running")
     print(f"  Dashboard -> http://127.0.0.1:{port}")
+    print(f"  LAN access -> http://{_get_lan_ip()}:{port}")
     if background_mode:
         print("  Mode: background (recorder only)")
     print("  Tray icon: teal T")
     print("=" * 48)
 
-    # Open browser on first run (unless background mode)
     if not background_mode and config.get('show_onboarding', True):
         webbrowser.open(f'http://127.0.0.1:{port}')
 
     if background_mode:
-        # Background mode: no tray UI, just run forever
         try:
             while True:
                 time.sleep(60)
@@ -142,6 +144,17 @@ def main():
     cloud.stop()
     db.flush_buffer()
     db.close()
+
+
+def _get_lan_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return '127.0.0.1'
 
 
 if __name__ == '__main__':

@@ -1,4 +1,5 @@
-"""TypeKeep Flask Server - API + web dashboard."""
+"""TypeKeep Flask Server - API + web dashboard with version tracking,
+health checks, and LAN/CORS support."""
 
 import io
 import json
@@ -10,6 +11,8 @@ import queue
 import threading
 from flask import Flask, jsonify, request, render_template, send_file, send_from_directory, Response
 
+from config import APP_VERSION
+
 
 def create_app(database, recorder, config, cloud_sync=None):
     app = Flask(__name__)
@@ -18,12 +21,10 @@ def create_app(database, recorder, config, cloud_sync=None):
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.WARNING)
 
-    # SSE clients for live updates
     _sse_clients = []
     _sse_lock = threading.Lock()
 
     def _broadcast_sse(event_type, data=None):
-        """Send an SSE event to all connected clients."""
         msg = f"event: {event_type}\ndata: {json.dumps(data or {})}\n\n"
         with _sse_lock:
             dead = []
@@ -35,20 +36,30 @@ def create_app(database, recorder, config, cloud_sync=None):
             for q in dead:
                 _sse_clients.remove(q)
 
-    # Expose broadcast function for clipboard monitor
     app.broadcast_sse = _broadcast_sse
 
-    # Ensure device identity
     if not config.get('device_id'):
         config.set('device_id', str(uuid.uuid4())[:8])
     if not config.get('device_name'):
         import socket
         config.set('device_name', socket.gethostname())
 
+    @app.after_request
+    def _cors(response):
+        origin = request.headers.get('Origin', '')
+        if origin:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return response
+
+    @app.errorhandler(Exception)
+    def _handle_error(e):
+        return jsonify({'error': str(e)}), 500
+
     # ── Helpers ────────────────────────────────────────────────
 
     def _time_range():
-        """Parse common time-range query param."""
         tr = request.args.get('range', '24h')
         now = time.time()
         m = {'1h': 3600, '3h': 10800, '6h': 21600, '12h': 43200,
@@ -62,6 +73,22 @@ def create_app(database, recorder, config, cloud_sync=None):
     @app.route('/')
     def index():
         return render_template('index.html')
+
+    # ── Version & Health ───────────────────────────────────────
+
+    @app.route('/api/version')
+    def api_version():
+        return jsonify({
+            'version': APP_VERSION,
+            'device_id': config.get('device_id'),
+            'device_name': config.get('device_name'),
+            'recording': recorder.recording,
+            'uptime': time.time() - float(database.get_meta('last_launch', str(time.time()))),
+        })
+
+    @app.route('/api/health')
+    def api_health():
+        return jsonify({'status': 'ok', 'version': APP_VERSION, 'ts': time.time()})
 
     # ── Messages (text history) ────────────────────────────────
 
@@ -105,8 +132,6 @@ def create_app(database, recorder, config, cloud_sync=None):
         events = database.get_activity(start, end, types, limit)
         return jsonify({'events': events, 'total': len(events)})
 
-    # ── Shortcuts log ──────────────────────────────────────────
-
     @app.route('/api/shortcuts')
     def api_shortcuts():
         start, end = _time_range()
@@ -122,8 +147,6 @@ def create_app(database, recorder, config, cloud_sync=None):
         database.flush_buffer()
         return jsonify(database.get_stats())
 
-    # ── Apps list ──────────────────────────────────────────────
-
     @app.route('/api/apps')
     def api_apps():
         start, _ = _time_range()
@@ -138,7 +161,10 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     @app.route('/api/status')
     def api_status():
-        return jsonify({'recording': recorder.recording})
+        return jsonify({
+            'recording': recorder.recording,
+            'version': APP_VERSION,
+        })
 
     # ── Settings ───────────────────────────────────────────────
 
@@ -158,22 +184,19 @@ def create_app(database, recorder, config, cloud_sync=None):
             'context_aware_grouping', 'smart_enter',
             'start_on_boot', 'start_background_on_boot', 'start_ui_on_boot',
             'start_minimized', 'show_onboarding',
-            'backup_enabled', 'backup_service', 'backup_interval_minutes',
-            'buffer_flush_seconds', 'theme',
+            'auto_backup_enabled', 'buffer_flush_seconds', 'theme',
             'cloud_sync_enabled', 'supabase_url', 'supabase_anon_key',
             'cloud_sync_key', 'cloud_sync_clipboard', 'cloud_sync_messages',
         }
         filtered = {k: v for k, v in data.items() if k in safe_keys}
         config.update(filtered)
 
-        # Handle start-on-boot toggle
         if 'start_on_boot' in filtered or 'start_background_on_boot' in filtered:
             boot_enabled = filtered.get('start_on_boot', config.get('start_on_boot', True))
             bg_mode = filtered.get('start_background_on_boot', config.get('start_background_on_boot', True))
             ui_on_boot = filtered.get('start_ui_on_boot', config.get('start_ui_on_boot', False))
             _set_startup(boot_enabled, bg_mode, ui_on_boot)
 
-        # Restart cloud sync if settings changed
         if cloud_sync and any(k in filtered for k in (
                 'cloud_sync_enabled', 'supabase_url',
                 'supabase_anon_key', 'cloud_sync_key')):
@@ -242,8 +265,10 @@ def create_app(database, recorder, config, cloud_sync=None):
         macros = database.get_macros()
         for m in macros:
             if isinstance(m.get('actions'), str):
-                try: m['actions'] = json.loads(m['actions'])
-                except Exception: m['actions'] = []
+                try:
+                    m['actions'] = json.loads(m['actions'])
+                except Exception:
+                    m['actions'] = []
         return jsonify({'macros': macros})
 
     @app.route('/api/macros', methods=['POST'])
@@ -275,7 +300,6 @@ def create_app(database, recorder, config, cloud_sync=None):
         actions = macro.get('actions', '[]')
         if isinstance(actions, str):
             actions = json.loads(actions)
-        import threading
         threading.Thread(target=recorder.run_macro, args=(actions,),
                          daemon=True).start()
         return jsonify({'status': 'running'})
@@ -304,7 +328,6 @@ def create_app(database, recorder, config, cloud_sync=None):
         entries, total = database.get_clipboard(
             start, end, ctype or None, search or None,
             limit, offset, pinned)
-        # Convert file paths to serve URLs
         for e in entries:
             if e.get('file_path') and os.path.exists(e['file_path']):
                 e['file_url'] = f"/api/clips/{os.path.basename(e['file_path'])}"
@@ -343,11 +366,31 @@ def create_app(database, recorder, config, cloud_sync=None):
             os.path.dirname(os.path.abspath(__file__)), 'data', 'clips')
         return send_from_directory(clips_dir, filename)
 
+    # ── Backup & Restore ───────────────────────────────────────
+
+    @app.route('/api/backup', methods=['POST'])
+    def api_backup():
+        database.maybe_backup()
+        return jsonify({'status': 'ok'})
+
+    @app.route('/api/backups')
+    def api_backups():
+        import glob
+        backup_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'backups')
+        files = sorted(glob.glob(os.path.join(backup_dir, 'typekeep_*.db')), reverse=True)
+        backups = []
+        for f in files:
+            backups.append({
+                'filename': os.path.basename(f),
+                'size_mb': round(os.path.getsize(f) / (1024 * 1024), 2),
+                'modified': os.path.getmtime(f),
+            })
+        return jsonify({'backups': backups})
+
     # ── Sync / Devices ─────────────────────────────────────────
 
     @app.route('/api/sync/info')
     def api_sync_info():
-        """Return this device's identity and sync configuration."""
         return jsonify({
             'device_id': config.get('device_id'),
             'device_name': config.get('device_name'),
@@ -359,7 +402,6 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     @app.route('/api/sync/info', methods=['POST'])
     def api_sync_info_update():
-        """Update this device's sync configuration."""
         data = request.get_json(silent=True) or {}
         safe = {k: v for k, v in data.items()
                 if k in ('device_name', 'sync_key', 'sync_enabled',
@@ -373,19 +415,17 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     @app.route('/api/sync/pair', methods=['POST'])
     def api_sync_pair():
-        """Pair with a remote device by IP:port + sync key."""
         data = request.get_json(silent=True) or {}
         ip = data.get('ip', '').strip()
-        port = int(data.get('port', 7700))
+        port_num = int(data.get('port', 7700))
         key = data.get('sync_key', '').strip()
 
         if not ip:
             return jsonify({'error': 'IP address required'}), 400
 
-        # Verify remote device
         import requests as rq
         try:
-            r = rq.get(f'http://{ip}:{port}/api/sync/handshake',
+            r = rq.get(f'http://{ip}:{port_num}/api/sync/handshake',
                        params={'key': key, 'device_id': config.get('device_id'),
                                'device_name': config.get('device_name')},
                        timeout=5)
@@ -397,7 +437,7 @@ def create_app(database, recorder, config, cloud_sync=None):
 
         database.upsert_device(
             remote['device_id'], remote['device_name'],
-            ip, port,
+            ip, port_num,
             sync_enabled=1,
             clipboard_sync=int(data.get('clipboard_sync', False)),
         )
@@ -405,7 +445,6 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     @app.route('/api/sync/handshake')
     def api_sync_handshake():
-        """Respond to a pairing request from a remote device."""
         key = request.args.get('key', '')
         my_key = config.get('sync_key', '')
         if not my_key or key != my_key:
@@ -432,7 +471,6 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     @app.route('/api/sync/pull', methods=['POST'])
     def api_sync_pull():
-        """Pull clipboard data from a paired device."""
         data = request.get_json(silent=True) or {}
         device_id = data.get('device_id')
         devices = database.get_devices()
@@ -453,7 +491,6 @@ def create_app(database, recorder, config, cloud_sync=None):
         except Exception as exc:
             return jsonify({'error': f'Cannot reach device: {exc}'}), 400
 
-        # Import clipboard entries from remote
         imported = 0
         for entry in remote_data.get('clipboard', []):
             database.add_clipboard_entry(
@@ -469,7 +506,6 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     @app.route('/api/sync/data')
     def api_sync_serve_data():
-        """Serve local data to a paired device (authenticated)."""
         key = request.args.get('key', '')
         my_key = config.get('sync_key', '')
         if not my_key or key != my_key:
@@ -479,7 +515,6 @@ def create_app(database, recorder, config, cloud_sync=None):
         result = {}
         if data_type in ('clipboard', 'all'):
             entries, _ = database.get_clipboard(limit=500)
-            # Strip file paths (they're local)
             for e in entries:
                 e.pop('file_path', None)
                 e.pop('thumbnail_path', None)
@@ -492,7 +527,6 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     @app.route('/api/sync/push-clipboard', methods=['POST'])
     def api_sync_receive_clipboard():
-        """Receive a clipboard entry pushed from a paired device."""
         key = request.args.get('key', '')
         my_key = config.get('sync_key', '')
         if not my_key or key != my_key:
@@ -565,25 +599,23 @@ def create_app(database, recorder, config, cloud_sync=None):
             source_app=data.get('source_app', 'API'),
         )
         return jsonify({'status': 'ok' if ok else 'error'})
+
     # ── Server-Sent Events (live updates) ────────────────────
 
     @app.route('/api/events-stream')
     def api_sse():
-        """SSE endpoint for real-time updates. Keeps connection alive."""
         client_q = queue.Queue(maxsize=50)
         with _sse_lock:
             _sse_clients.append(client_q)
 
         def generate():
             try:
-                # Send initial heartbeat
                 yield 'event: connected\ndata: {}\n\n'
                 while True:
                     try:
                         msg = client_q.get(timeout=15)
                         yield msg
                     except queue.Empty:
-                        # Send keepalive comment
                         yield ': keepalive\n\n'
             except GeneratorExit:
                 pass
@@ -601,6 +633,7 @@ def create_app(database, recorder, config, cloud_sync=None):
                 'X-Accel-Buffering': 'no',
             },
         )
+
     # ── Mobile PWA serving ─────────────────────────────────────
 
     @app.route('/mobile')
@@ -620,21 +653,24 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     def _set_startup(enabled, bg_mode=True, ui_on_boot=False):
         try:
-            import sys, os, winreg
+            import sys
+            import winreg
             key = winreg.OpenKey(
                 winreg.HKEY_CURRENT_USER,
                 r"Software\Microsoft\Windows\CurrentVersion\Run",
                 0, winreg.KEY_SET_VALUE)
             if enabled:
+                exe = sys.executable
                 script = os.path.abspath(os.path.join(
                     os.path.dirname(__file__), 'typekeep.py'))
-                # Background mode: run recorder only (minimized, no browser)
+                if exe.lower().endswith('python.exe'):
+                    exe = exe.replace('python.exe', 'pythonw.exe')
                 if bg_mode and not ui_on_boot:
                     winreg.SetValueEx(key, 'TypeKeep', 0, winreg.REG_SZ,
-                                      f'pythonw "{script}" --background')
+                                      f'"{exe}" "{script}" --background')
                 else:
                     winreg.SetValueEx(key, 'TypeKeep', 0, winreg.REG_SZ,
-                                      f'pythonw "{script}"')
+                                      f'"{exe}" "{script}"')
             else:
                 try:
                     winreg.DeleteValue(key, 'TypeKeep')

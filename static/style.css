@@ -72,6 +72,9 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .search-wrap input{width:100%;padding:8px 14px 8px 38px;border-radius:var(--radius);
   background:var(--bg-secondary);border:1px solid var(--border)}
 .topbar-right{display:flex;align-items:center;gap:10px;margin-left:auto}
+.version-badge{font-size:.72rem;padding:2px 8px;border-radius:12px;
+  background:var(--accent-dim);color:var(--accent);font-weight:700;letter-spacing:.3px;
+  font-family:'Cascadia Code','Fira Code',Consolas,monospace}
 .icon-btn{width:36px;height:36px;display:grid;place-items:center;
   border-radius:var(--radius-sm);color:var(--text-secondary);
   transition:background var(--ease),color var(--ease)}
@@ -155,6 +158,10 @@ input:focus,textarea:focus{outline:none;border-color:var(--accent)}
 }
 .card-app-info{display:flex;align-items:center;gap:8px;font-size:.82rem;min-width:0}
 .app-icon{font-size:1rem;flex-shrink:0}
+.app-icon-abbr{display:inline-flex;align-items:center;justify-content:center;
+  width:26px;height:26px;border-radius:6px;background:var(--accent-dim);color:var(--accent);
+  font-size:.65rem;font-weight:800;font-family:'Cascadia Code','Fira Code',monospace;
+  letter-spacing:-.5px;flex-shrink:0}
 .app-name{font-weight:600;color:var(--text-primary);white-space:nowrap}
 .window-title{color:var(--text-muted);font-size:.76rem;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;max-width:300px}
