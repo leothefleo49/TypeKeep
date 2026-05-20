@@ -122,6 +122,14 @@ class Database:
         with self._buffer_lock:
             self._flush_locked()
 
+    def flush_buffer_returning_count(self):
+        """Flush and return how many events were written. Lets background loops
+        skip downstream work (SSE broadcasts, backups) when nothing happened."""
+        with self._buffer_lock:
+            count = len(self._buffer)
+            self._flush_locked()
+        return count
+
     def _flush_locked(self):
         """Must be called while holding _buffer_lock."""
         if not self._buffer:

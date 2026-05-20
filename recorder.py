@@ -233,12 +233,14 @@ class Recorder:
     # ── Notification watcher (Windows) ─────────────────────────
 
     def _start_notification_watcher(self):
+        # Sleeps 3s between scans instead of 1s. Toast notifications stay visible
+        # for at least ~5s on Windows so this still catches them while dropping
+        # background CPU to negligible.
         def _watch():
             last_title = ''
             while self.recording:
                 try:
                     title, proc = _get_active_window_info()
-                    # Detect notification-related windows
                     lower_proc = (proc or '').lower()
                     lower_title = (title or '').lower()
                     is_notif = (
@@ -261,7 +263,7 @@ class Recorder:
                     last_title = title
                 except Exception:
                     pass
-                time.sleep(1)
+                time.sleep(3)
 
         t = threading.Thread(target=_watch, daemon=True, name='notif-watcher')
         t.start()

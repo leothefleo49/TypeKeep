@@ -106,19 +106,32 @@ class ClipboardMonitor:
         self._running = False
 
     def _poll_loop(self):
+        # Adaptive poll: 0.4s when clipboard just changed (so a fast paste-then-copy
+        # is captured), 1.5s when idle. GetClipboardSequenceNumber is a kernel-side
+        # counter so the check itself is virtually free — sleeping longer is what
+        # keeps idle CPU near zero.
+        idle_streak = 0
         while self._running:
-            poll_seconds = max(0.5, float(self.config.get('clipboard_poll_seconds', 1.25) or 1.25))
             try:
                 if not self.config.get('record_clipboard', True):
-                    time.sleep(2)
+                    time.sleep(2.0)
                     continue
                 seq = _user32.GetClipboardSequenceNumber()
                 if seq != self._last_seq and self._last_seq != 0:
                     self._read_clipboard()
+                    idle_streak = 0
+                else:
+                    idle_streak = min(idle_streak + 1, 8)
                 self._last_seq = seq
             except Exception:
                 pass
-            time.sleep(poll_seconds)
+            # If the user pinned a fixed poll interval in config use it,
+            # otherwise scale from 0.4s (right after a change) up to 1.5s when idle.
+            override = self.config.get('clipboard_poll_seconds', None)
+            if override:
+                time.sleep(max(0.5, float(override)))
+            else:
+                time.sleep(0.4 if idle_streak < 2 else min(1.5, 0.4 + idle_streak * 0.15))
 
     def _read_clipboard(self):
         try:

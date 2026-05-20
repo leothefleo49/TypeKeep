@@ -3,19 +3,23 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
-dist/
-build/
 *.egg
 
-# Data (local only)
+# Data (local only) - everything user-generated under data/ stays local
 data/typekeep.db
 data/typekeep.db-wal
 data/typekeep.db-shm
+data/typekeep.log
 data/config.json
 data/config.backup.json
-data/typekeep.log
-data/backups/
 data/clips/
+data/backups/
+
+# PyInstaller / build artifacts
+build/
+dist/
+*.spec
+*.exe
 
 # IDE
 .vscode/
@@ -28,6 +32,5 @@ data/clips/
 Thumbs.db
 .DS_Store
 
-# Build artifacts
-*.spec
-*.exe
+# Temp
+.commit_msg.txt
