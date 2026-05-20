@@ -107,6 +107,7 @@ class ClipboardMonitor:
 
     def _poll_loop(self):
         while self._running:
+            poll_seconds = max(0.5, float(self.config.get('clipboard_poll_seconds', 1.25) or 1.25))
             try:
                 if not self.config.get('record_clipboard', True):
                     time.sleep(2)
@@ -117,7 +118,7 @@ class ClipboardMonitor:
                 self._last_seq = seq
             except Exception:
                 pass
-            time.sleep(0.5)
+            time.sleep(poll_seconds)
 
     def _read_clipboard(self):
         try:

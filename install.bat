@@ -16,6 +16,14 @@ pip install -r "%~dp0requirements.txt"
 
 echo.
 echo ============================================
-echo   Done!  Run  start.bat  to launch TypeKeep.
+echo   Registering TypeKeep background startup
+echo ============================================
+
+python "%~dp0typekeep.py" --install
+
+echo.
+echo ============================================
+echo   Done! TypeKeep is installed and running.
+echo   Run start.bat any time to open the dashboard.
 echo ============================================
 pause

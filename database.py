@@ -143,8 +143,7 @@ class Database:
             conn.commit()
         except Exception as exc:
             print(f"[TypeKeep] DB flush error: {exc}")
-            with self._buffer_lock:
-                self._buffer = batch + self._buffer
+            self._buffer = batch + self._buffer
 
     # ── Auto-backup ────────────────────────────────────────────
 
@@ -859,6 +858,31 @@ class Database:
              thumbnail_path, source_app, source_title, extra, device_id))
         conn.commit()
         return cur.lastrowid
+
+    def clipboard_entry_exists(self, content_type, content_text=None,
+                               device_id=None, source_app=None,
+                               since_seconds=900):
+        conn = self._get_conn()
+        clauses = ["content_type = ?", "timestamp >= ?"]
+        params = [content_type, time.time() - since_seconds]
+        if content_text is None:
+            clauses.append("content_text IS NULL")
+        else:
+            clauses.append("content_text = ?")
+            params.append(content_text)
+        if device_id is None:
+            clauses.append("device_id IS NULL")
+        else:
+            clauses.append("device_id = ?")
+            params.append(device_id)
+        if source_app:
+            clauses.append("(source_app = ? OR source_app IS NULL)")
+            params.append(source_app)
+        row = conn.execute(
+            f"SELECT id FROM clipboard_entries WHERE {' AND '.join(clauses)} LIMIT 1",
+            params,
+        ).fetchone()
+        return bool(row)
 
     def get_clipboard(self, start_time=None, end_time=None,
                       content_type=None, search=None,

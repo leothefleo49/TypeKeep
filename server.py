@@ -36,7 +36,12 @@ def create_app(database, recorder, config, cloud_sync=None):
             for q in dead:
                 _sse_clients.remove(q)
 
+    def _sse_client_count():
+        with _sse_lock:
+            return len(_sse_clients)
+
     app.broadcast_sse = _broadcast_sse
+    app.sse_client_count = _sse_client_count
 
     if not config.get('device_id'):
         config.set('device_id', str(uuid.uuid4())[:8])
@@ -88,7 +93,13 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     @app.route('/api/health')
     def api_health():
-        return jsonify({'status': 'ok', 'version': APP_VERSION, 'ts': time.time()})
+        return jsonify({
+            'status': 'ok',
+            'version': APP_VERSION,
+            'recording': recorder.recording,
+            'sse_clients': app.sse_client_count(),
+            'ts': time.time(),
+        })
 
     # ── Messages (text history) ────────────────────────────────
 
@@ -177,9 +188,10 @@ def create_app(database, recorder, config, cloud_sync=None):
         data = request.get_json(silent=True) or {}
         safe_keys = {
             'retention_days', 'default_gap_seconds', 'same_window_gap_seconds',
+            'record_keyboard',
             'record_mouse_clicks', 'record_mouse_scroll', 'record_mouse_movement',
             'record_shortcuts', 'record_notifications', 'record_clipboard',
-            'clipboard_retention_days', 'mouse_sample_ms',
+            'clipboard_retention_days', 'clipboard_poll_seconds', 'mouse_sample_ms',
             'min_message_length', 'max_messages_display', 'split_on_enter',
             'context_aware_grouping', 'smart_enter',
             'start_on_boot', 'start_background_on_boot', 'start_ui_on_boot',
@@ -187,6 +199,7 @@ def create_app(database, recorder, config, cloud_sync=None):
             'auto_backup_enabled', 'buffer_flush_seconds', 'theme',
             'cloud_sync_enabled', 'supabase_url', 'supabase_anon_key',
             'cloud_sync_key', 'cloud_sync_clipboard', 'cloud_sync_messages',
+            'cloud_sync_interval_seconds',
         }
         filtered = {k: v for k, v in data.items() if k in safe_keys}
         config.update(filtered)
@@ -427,7 +440,8 @@ def create_app(database, recorder, config, cloud_sync=None):
         try:
             r = rq.get(f'http://{ip}:{port_num}/api/sync/handshake',
                        params={'key': key, 'device_id': config.get('device_id'),
-                               'device_name': config.get('device_name')},
+                               'device_name': config.get('device_name'),
+                               'port': config.get('server_port', 7700)},
                        timeout=5)
             if r.status_code != 200:
                 return jsonify({'error': 'Pairing rejected: ' + r.json().get('error', 'unknown')}), 400
@@ -447,6 +461,8 @@ def create_app(database, recorder, config, cloud_sync=None):
     def api_sync_handshake():
         key = request.args.get('key', '')
         my_key = config.get('sync_key', '')
+        if not config.get('sync_enabled', False):
+            return jsonify({'error': 'Sync is disabled on this device'}), 403
         if not my_key or key != my_key:
             return jsonify({'error': 'Invalid sync key'}), 403
 
@@ -454,13 +470,15 @@ def create_app(database, recorder, config, cloud_sync=None):
         remote_name = request.args.get('device_name', 'Unknown')
         if remote_id:
             remote_ip = request.remote_addr
+            remote_port = request.args.get('port', 7700, type=int)
             database.upsert_device(
-                remote_id, remote_name, remote_ip, 7700,
+                remote_id, remote_name, remote_ip, remote_port,
                 sync_enabled=1, clipboard_sync=0)
 
         return jsonify({
             'device_id': config.get('device_id'),
             'device_name': config.get('device_name'),
+            'port': config.get('server_port', 7700),
             'status': 'ok',
         })
 
@@ -472,6 +490,8 @@ def create_app(database, recorder, config, cloud_sync=None):
     @app.route('/api/sync/pull', methods=['POST'])
     def api_sync_pull():
         data = request.get_json(silent=True) or {}
+        if not config.get('sync_enabled', False):
+            return jsonify({'error': 'Sync is disabled on this device'}), 403
         device_id = data.get('device_id')
         devices = database.get_devices()
         target = next((d for d in devices if d['id'] == device_id), None)
@@ -493,6 +513,13 @@ def create_app(database, recorder, config, cloud_sync=None):
 
         imported = 0
         for entry in remote_data.get('clipboard', []):
+            if database.clipboard_entry_exists(
+                    entry['content_type'],
+                    entry.get('content_text'),
+                    device_id=device_id,
+                    source_app=entry.get('source_app'),
+                    since_seconds=86400):
+                continue
             database.add_clipboard_entry(
                 content_type=entry['content_type'],
                 content_text=entry.get('content_text'),
@@ -508,6 +535,8 @@ def create_app(database, recorder, config, cloud_sync=None):
     def api_sync_serve_data():
         key = request.args.get('key', '')
         my_key = config.get('sync_key', '')
+        if not config.get('sync_enabled', False):
+            return jsonify({'error': 'Sync is disabled on this device'}), 403
         if not my_key or key != my_key:
             return jsonify({'error': 'Unauthorized'}), 403
 
@@ -529,11 +558,20 @@ def create_app(database, recorder, config, cloud_sync=None):
     def api_sync_receive_clipboard():
         key = request.args.get('key', '')
         my_key = config.get('sync_key', '')
+        if not config.get('sync_enabled', False):
+            return jsonify({'error': 'Sync is disabled on this device'}), 403
         if not my_key or key != my_key:
             return jsonify({'error': 'Unauthorized'}), 403
 
         data = request.get_json(silent=True) or {}
         if data.get('content_type'):
+            if database.clipboard_entry_exists(
+                    data['content_type'],
+                    data.get('content_text'),
+                    device_id=data.get('device_id'),
+                    source_app=data.get('source_app'),
+                    since_seconds=86400):
+                return jsonify({'status': 'ok', 'duplicate': True})
             database.add_clipboard_entry(
                 content_type=data['content_type'],
                 content_text=data.get('content_text'),
@@ -661,16 +699,20 @@ def create_app(database, recorder, config, cloud_sync=None):
                 0, winreg.KEY_SET_VALUE)
             if enabled:
                 exe = sys.executable
-                script = os.path.abspath(os.path.join(
-                    os.path.dirname(__file__), 'typekeep.py'))
-                if exe.lower().endswith('python.exe'):
-                    exe = exe.replace('python.exe', 'pythonw.exe')
+                if getattr(sys, 'frozen', False):
+                    base_cmd = f'"{exe}"'
+                else:
+                    script = os.path.abspath(os.path.join(
+                        os.path.dirname(__file__), 'typekeep.py'))
+                    if exe.lower().endswith('python.exe'):
+                        exe = exe.replace('python.exe', 'pythonw.exe')
+                    base_cmd = f'"{exe}" "{script}"'
                 if bg_mode and not ui_on_boot:
                     winreg.SetValueEx(key, 'TypeKeep', 0, winreg.REG_SZ,
-                                      f'"{exe}" "{script}" --background')
+                                      f'{base_cmd} --background')
                 else:
                     winreg.SetValueEx(key, 'TypeKeep', 0, winreg.REG_SZ,
-                                      f'"{exe}" "{script}"')
+                                      base_cmd)
             else:
                 try:
                     winreg.DeleteValue(key, 'TypeKeep')

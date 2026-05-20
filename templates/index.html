@@ -379,7 +379,8 @@
       <fieldset>
         <legend>Data</legend>
         <div class="field"><label>Retention (days)</label><input type="number" id="s-retention" min="1" max="3650" value="30"></div>
-        <div class="field"><label>Auto-save interval (seconds)</label><input type="number" id="s-flush" min="1" max="60" value="1"></div>
+        <div class="field"><label>Auto-save interval (seconds)</label><input type="number" id="s-flush" min="1" max="60" step="0.5" value="2"></div>
+        <div class="field"><label>Clipboard poll interval (seconds)</label><input type="number" id="s-clip-poll" min="0.5" max="10" step="0.25" value="1.25"></div>
       </fieldset>
       <fieldset>
         <legend>Startup</legend>
@@ -400,6 +401,7 @@
         <div class="field-check"><input type="checkbox" id="s-cloud-enabled"><label for="s-cloud-enabled">Enable cloud sync</label></div>
         <div class="field-check"><input type="checkbox" id="s-cloud-clipboard" checked><label for="s-cloud-clipboard">Sync clipboard to cloud</label></div>
         <div class="field-check"><input type="checkbox" id="s-cloud-messages" checked><label for="s-cloud-messages">Sync typing history to cloud</label></div>
+        <div class="field"><label>Cloud sync interval (seconds)</label><input type="number" id="s-cloud-interval" min="10" max="300" step="5" value="30"></div>
         <button class="btn-ghost-sm" onclick="testCloudConnection()" style="margin-top:6px">Test Connection</button>
         <span id="cloud-test-result" style="font-size:12px;margin-left:8px"></span>
         <p class="hint" style="margin-top:8px"><strong>Phone app:</strong> Open <a href="/mobile" target="_blank" style="color:var(--accent)">on this device</a> or <a href="https://leothefleo49.github.io/TypeKeep/" target="_blank" style="color:var(--accent)">leothefleo49.github.io/TypeKeep</a> on your phone, then enter the same sync key.</p>

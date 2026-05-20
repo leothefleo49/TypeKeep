@@ -74,25 +74,28 @@ class Recorder:
     # ── Control ────────────────────────────────────────────────
 
     def start(self):
-        self._kb_listener = keyboard.Listener(
-            on_press=self._on_key_press,
-            on_release=self._on_key_release,
-        )
-        self._kb_listener.daemon = True
-        self._kb_listener.start()
+        try:
+            self._kb_listener = keyboard.Listener(
+                on_press=self._on_key_press,
+                on_release=self._on_key_release,
+            )
+            self._kb_listener.daemon = True
+            self._kb_listener.start()
+        except Exception as exc:
+            print(f"[TypeKeep] Keyboard listener failed to start: {exc}")
 
-        record_clicks = self.config.get('record_mouse_clicks', True)
-        record_scroll = self.config.get('record_mouse_scroll', False)
-        record_move = self.config.get('record_mouse_movement', False)
-
-        if record_clicks or record_scroll or record_move:
+        try:
             self._mouse_listener = mouse.Listener(
-                on_click=self._on_mouse_click if record_clicks else None,
-                on_scroll=self._on_mouse_scroll if record_scroll else None,
-                on_move=self._on_mouse_move if record_move else None,
+                on_click=self._on_mouse_click,
+                on_scroll=self._on_mouse_scroll,
+                on_move=(self._on_mouse_move
+                         if self.config.get('record_mouse_movement', False)
+                         else None),
             )
             self._mouse_listener.daemon = True
             self._mouse_listener.start()
+        except Exception as exc:
+            print(f"[TypeKeep] Mouse listener failed to start: {exc}")
 
         # Notification detection thread
         if self.config.get('record_notifications', True) and _IS_WINDOWS:
@@ -119,7 +122,7 @@ class Recorder:
     # ── Keyboard ───────────────────────────────────────────────
 
     def _on_key_press(self, key):
-        if not self.recording:
+        if not self.recording or not self.config.get('record_keyboard', True):
             return
 
         if key in _MODIFIER_KEYS:
@@ -168,12 +171,16 @@ class Recorder:
         })
 
     def _on_key_release(self, key):
+        if not self.config.get('record_keyboard', True):
+            self._modifiers.clear()
+            return
         self._modifiers.discard(key)
 
     # ── Mouse ──────────────────────────────────────────────────
 
     def _on_mouse_click(self, x, y, button, pressed):
-        if not self.recording or not pressed:
+        if (not self.recording or not pressed
+                or not self.config.get('record_mouse_clicks', True)):
             return
         title, proc = self._active_window()
         self.db.buffer_event({
@@ -188,7 +195,7 @@ class Recorder:
         })
 
     def _on_mouse_scroll(self, x, y, dx, dy):
-        if not self.recording:
+        if not self.recording or not self.config.get('record_mouse_scroll', False):
             return
         title, proc = self._active_window()
         self.db.buffer_event({
@@ -203,7 +210,7 @@ class Recorder:
         })
 
     def _on_mouse_move(self, x, y):
-        if not self.recording:
+        if not self.recording or not self.config.get('record_mouse_movement', False):
             return
         now = time.time()
         sample_ms = self.config.get('mouse_sample_ms', 500)

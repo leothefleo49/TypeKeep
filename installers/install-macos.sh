@@ -122,7 +122,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST'
     <key>CFBundleExecutable</key>   <string>TypeKeep</string>
     <key>CFBundleIdentifier</key>   <string>com.typekeep.app</string>
     <key>CFBundleName</key>         <string>TypeKeep</string>
-    <key>CFBundleVersion</key>      <string>3.1.0</string>
+    <key>CFBundleVersion</key>      <string>3.2.0</string>
     <key>CFBundlePackageType</key>  <string>APPL</string>
     <key>LSUIElement</key>          <true/>
 </dict>

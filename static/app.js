@@ -238,7 +238,7 @@ function copyMsg(btn, idx) {
 async function deleteMsg(idx) {
   const m = S.messages[idx];
   if (!m) return;
-  if (!confirm('Delete this message? This cannot be undone.')) return;
+  if (!(await askConfirm('Delete this message? This cannot be undone.'))) return;
   try {
     await api('/api/delete-events', {
       method: 'POST',
@@ -360,7 +360,7 @@ async function runMacro(id) {
 }
 
 async function deleteMacro(id) {
-  if (!confirm('Delete this macro?')) return;
+  if (!(await askConfirm('Delete this macro?'))) return;
   try {
     await api(`/api/macros/${id}`, { method: 'DELETE' });
     toast('Macro deleted');
@@ -569,6 +569,7 @@ function openSettings() {
   el('s-smart-enter').checked = s.smart_enter ?? true;
   el('s-retention').value     = s.retention_days ?? 30;
   el('s-flush').value         = s.buffer_flush_seconds ?? 1;
+  el('s-clip-poll').value     = s.clipboard_poll_seconds ?? 1.25;
   el('s-boot').checked        = s.start_on_boot ?? true;
   el('s-bg-boot').checked     = s.start_background_on_boot ?? true;
   el('s-ui-boot').checked     = s.start_ui_on_boot ?? false;
@@ -579,13 +580,16 @@ function openSettings() {
   el('s-cloud-enabled').checked = s.cloud_sync_enabled ?? false;
   el('s-cloud-clipboard').checked = s.cloud_sync_clipboard ?? true;
   el('s-cloud-messages').checked = s.cloud_sync_messages ?? true;
+  el('s-cloud-interval').value = s.cloud_sync_interval_seconds ?? 30;
   el('cloud-test-result').textContent = '';
   el('settings-modal').style.display = '';
 }
 
 function closeSettings() { el('settings-modal').style.display = 'none'; }
 
-async function saveSettings() {
+async function saveSettings(options = {}) {
+  const closeAfter = options.closeAfter !== false;
+  const quiet = options.quiet === true;
   const data = {
     record_keyboard:       el('s-keyboard').checked,
     record_mouse_clicks:   el('s-mouse').checked,
@@ -602,6 +606,7 @@ async function saveSettings() {
     smart_enter:           el('s-smart-enter').checked,
     retention_days:        +el('s-retention').value,
     buffer_flush_seconds:  +el('s-flush').value,
+    clipboard_poll_seconds: +el('s-clip-poll').value,
     start_on_boot:         el('s-boot').checked,
     start_background_on_boot: el('s-bg-boot').checked,
     start_ui_on_boot:      el('s-ui-boot').checked,
@@ -612,6 +617,7 @@ async function saveSettings() {
     cloud_sync_enabled:    el('s-cloud-enabled').checked,
     cloud_sync_clipboard:  el('s-cloud-clipboard').checked,
     cloud_sync_messages:   el('s-cloud-messages').checked,
+    cloud_sync_interval_seconds: +el('s-cloud-interval').value,
   };
   try {
     const r = await api('/api/settings', {
@@ -624,8 +630,8 @@ async function saveSettings() {
     S.filters.context_aware = data.context_aware_grouping ? 'true' : 'false';
     S.filters.smart_enter = data.smart_enter ? 'true' : 'false';
     updateFilterButtons();
-    toast('Settings saved');
-    closeSettings();
+    if (!quiet) toast('Settings saved');
+    if (closeAfter) closeSettings();
     S._forceRender = true;
     loadMessages();
   } catch (_) { toast('Failed to save settings'); }
@@ -637,10 +643,10 @@ async function saveSettings() {
 async function testCloudConnection() {
   const result = el('cloud-test-result');
   result.textContent = 'Testing...';
-  result.style.color = 'var(--txt-muted)';
+  result.style.color = 'var(--text-muted)';
   try {
     // Save settings first so the backend has the latest config
-    await saveSettings();
+    await saveSettings({ closeAfter: false, quiet: true });
     const r = await api('/api/cloud/test', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
     });
@@ -684,7 +690,7 @@ async function confirmDelete() {
     end   = new Date(end).getTime() / 1000;
   }
 
-  if (!confirm('Are you SURE you want to permanently delete this data?')) return;
+  if (!(await askConfirm('Permanently delete this data? This cannot be undone.'))) return;
 
   try {
     await api('/api/delete-events', {
@@ -700,8 +706,8 @@ async function confirmDelete() {
 }
 
 async function clearAllData() {
-  if (!confirm('DELETE ALL DATA? This action CANNOT be undone!')) return;
-  if (!confirm('Are you ABSOLUTELY sure? Every event, every message will be gone.')) return;
+  if (!(await askConfirm('Delete all TypeKeep data? Every event and message will be gone.'))) return;
+  if (!(await askConfirm('Final confirmation: permanently delete every recorded event?'))) return;
   try {
     await api('/api/delete-all', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -943,7 +949,7 @@ async function toggleClipPin(id) {
 }
 
 async function deleteClipEntry(id) {
-  if (!confirm('Delete this clipboard entry?')) return;
+  if (!(await askConfirm('Delete this clipboard entry?'))) return;
   try {
     await api(`/api/clipboard/${id}`, { method: 'DELETE' });
     S.clipEntries = S.clipEntries.filter(e => e.id !== id);
@@ -953,7 +959,7 @@ async function deleteClipEntry(id) {
 }
 
 async function clearClipboard() {
-  if (!confirm('Clear all unpinned clipboard entries?')) return;
+  if (!(await askConfirm('Clear all unpinned clipboard entries?'))) return;
   try {
     await api('/api/clipboard/clear', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1050,7 +1056,7 @@ async function pairDevice() {
 }
 
 async function unpairDevice(id) {
-  if (!confirm('Unpair this device?')) return;
+  if (!(await askConfirm('Unpair this device?'))) return;
   try {
     await api(`/api/sync/unpair/${id}`, { method: 'DELETE' });
     toast('Device unpaired');
@@ -1244,6 +1250,41 @@ function toast(msg) {
   t.classList.add('show');
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+function askConfirm(message) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal confirm-modal" role="dialog" aria-modal="true">
+        <div class="modal-header"><h2>Confirm</h2></div>
+        <div class="modal-body"><p>${esc(message)}</p></div>
+        <div class="modal-footer">
+          <button class="btn-ghost" data-action="cancel">Cancel</button>
+          <button class="btn-danger" data-action="confirm">Confirm</button>
+        </div>
+      </div>`;
+    const close = value => {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      resolve(value);
+    };
+    const onKey = e => {
+      if (e.key === 'Escape') close(false);
+      if (e.key === 'Enter') close(true);
+    };
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) close(false);
+      const action = e.target && e.target.dataset && e.target.dataset.action;
+      if (action === 'cancel') close(false);
+      if (action === 'confirm') close(true);
+    });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(overlay);
+    const cancel = overlay.querySelector('[data-action="cancel"]');
+    if (cancel) cancel.focus();
+  });
 }
 
 function fmt(n) { return n == null ? '\u2014' : n.toLocaleString(); }

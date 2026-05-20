@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/TypeKeep-v3.0.0-2dd4bf?style=for-the-badge" alt="TypeKeep v3.0.0">
+  <img src="https://img.shields.io/badge/TypeKeep-v3.2.0-2dd4bf?style=for-the-badge" alt="TypeKeep v3.2.0">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android%20%7C%20iOS-blue?style=for-the-badge" alt="Platforms">
 </p>
 
@@ -43,13 +43,13 @@
 
 ---
 
-## What's New in v3.0.0
+## What's New in v3.2.0
 
-- **☁️ Cloud Sync** — Free Supabase-powered sync across all devices
-- **📱 Mobile App** — PWA companion app for Android and iOS
-- **🌐 Cross-Platform** — Desktop (Win/Mac/Linux) + Mobile (Android/iOS) all syncing together
-- **🔄 Automatic Releases** — GitHub Actions builds and publishes installers automatically
-- **🛠️ Improved Settings** — Cloud sync configuration built into the dashboard
+- **Background install mode** — `python typekeep.py --install` registers startup and launches the quiet background recorder
+- **Lower idle overhead** — slower clipboard polling, no idle SSE broadcasts, and fewer redundant sync writes
+- **More reliable sync** — URL-safe Supabase requests, required sync keys, LAN pairing port exchange, and duplicate clipboard protection
+- **Safer settings** — keyboard recording toggles now apply correctly, cloud tests stay in the settings modal, and destructive actions use in-app confirmation modals
+- **Manual releases only** — GitHub Actions no longer runs automatically on push or tags
 
 ---
 
@@ -161,8 +161,11 @@ cd TypeKeep
 # Install dependencies
 pip install -r requirements.txt
 
-# Run TypeKeep
-python typekeep.py
+# Install/start the quiet background service
+python typekeep.py --install
+
+# Open the dashboard later
+python typekeep.py --open
 ```
 
 ---
@@ -264,14 +267,16 @@ Settings are stored in `data/config.json`. Key options:
 | `record_keyboard` | `true` | Record keystrokes |
 | `record_mouse_clicks` | `true` | Record mouse clicks |
 | `record_clipboard` | `true` | Track clipboard changes |
+| `clipboard_poll_seconds` | `1.25` | Clipboard polling interval |
 | `default_gap_seconds` | `5` | Time gap to split messages |
 | `retention_days` | `30` | Auto-delete events older than N days |
 | `cloud_sync_enabled` | `false` | Enable cloud sync |
 | `cloud_sync_key` | `""` | Shared sync passphrase |
+| `cloud_sync_interval_seconds` | `30` | Cloud sync interval |
 | `supabase_url` | *(built-in)* | Supabase project URL (advanced override) |
 | `supabase_anon_key` | *(built-in)* | Supabase anon key (advanced override) |
 | `sync_enabled` | `false` | Enable LAN device sync |
-| `start_on_boot` | `false` | Run on Windows startup |
+| `start_on_boot` | `true` | Run on Windows startup |
 
 ---
 
@@ -289,15 +294,14 @@ pyinstaller --onefile --noconsole --name TypeKeep --add-data "templates;template
 pyinstaller --onefile --noconsole --name TypeKeep --add-data "templates:templates" --add-data "static:static" --add-data "mobile:mobile" typekeep.py
 ```
 
-### Automated Releases
+### Manual Releases
 
-Push a version tag to trigger automatic builds:
+Automatic release workflow triggers are intentionally disabled. Build and publish releases from a local machine after verifying the app:
 ```bash
-git tag v3.0.0
-git push origin v3.0.0
+node scripts/release-github.js --version 3.2.0
 ```
 
-Or manually trigger the workflow from the GitHub Actions tab.
+The GitHub workflow can still be started manually from the Actions tab if you explicitly want hosted cross-platform builds.
 
 ---
 
@@ -366,5 +370,5 @@ MIT License — free for personal and commercial use.
 ---
 
 <p align="center">
-  <strong>TypeKeep v3.0.0</strong> — Your keystrokes, your clipboard, every device, your control.
+  <strong>TypeKeep v3.2.0</strong> — Your keystrokes, your clipboard, every device, your control.
 </p>

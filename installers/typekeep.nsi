@@ -18,11 +18,11 @@ SetCompressor /SOLID lzma
 
 ; ── Version info ─────────────────────────────────────────────────
 !define PRODUCT_NAME "TypeKeep"
-!define PRODUCT_VERSION "3.1.0"
+!define PRODUCT_VERSION "3.2.0"
 !define PRODUCT_PUBLISHER "leothefleo49"
 !define PRODUCT_WEB_SITE "https://github.com/leothefleo49/TypeKeep"
 
-VIProductVersion "3.1.0.0"
+VIProductVersion "3.2.0.0"
 VIAddVersionKey "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey "ProductVersion" "${PRODUCT_VERSION}"
 VIAddVersionKey "FileDescription" "TypeKeep Installer"

@@ -12,7 +12,7 @@ DATA_DIR = os.path.join(BASE_DIR, 'data')
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 CONFIG_BACKUP = os.path.join(DATA_DIR, 'config.backup.json')
 
-APP_VERSION = '3.1.0'
+APP_VERSION = '3.2.0'
 
 DEFAULTS = {
     # Recording
@@ -39,7 +39,7 @@ DEFAULTS = {
     'retention_days': 30,
     'server_port': 7700,
     'cleanup_interval_seconds': 3600,
-    'buffer_flush_seconds': 1,
+    'buffer_flush_seconds': 2,
     'auto_save_interval': 1,
     'auto_backup_enabled': True,
 
@@ -52,6 +52,7 @@ DEFAULTS = {
 
     # Clipboard
     'record_clipboard': True,
+    'clipboard_poll_seconds': 1.25,
     'clipboard_retention_days': 30,
 
     # Sync
@@ -69,6 +70,7 @@ DEFAULTS = {
     'cloud_sync_key': '',
     'cloud_sync_clipboard': True,
     'cloud_sync_messages': True,
+    'cloud_sync_interval_seconds': 30,
 
     # Theme
     'theme': 'dark',
