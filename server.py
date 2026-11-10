@@ -49,13 +49,30 @@ def create_app(database, recorder, config, cloud_sync=None):
         import socket
         config.set('device_name', socket.gethostname())
 
-    @app.after_request
-    def _cors(response):
+    @app.before_request
+    def _same_origin_guard():
+        """Block cross-origin requests (webpages on other sites, CSRF,
+        DNS rebinding). The dashboard is served same-origin, so it is
+        unaffected; browsers enforce that only our own pages can talk
+        to this API."""
         origin = request.headers.get('Origin', '')
         if origin:
-            response.headers['Access-Control-Allow-Origin'] = origin
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            host = request.headers.get('Host', '')
+            try:
+                from urllib.parse import urlparse
+                o = urlparse(origin)
+                ohost = o.hostname or ''
+                hhost = host.split(':')[0] if host else ''
+                if ohost != hhost:
+                    return jsonify({'error': 'cross-origin request blocked'}), 403
+            except Exception:
+                return jsonify({'error': 'bad origin'}), 403
+        return None
+
+    @app.after_request
+    def _security_headers(response):
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Referrer-Policy'] = 'no-referrer'
         return response
 
     @app.errorhandler(Exception)
@@ -93,12 +110,26 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     @app.route('/api/health')
     def api_health():
+        # v3.3.0: health now reports the data-safety counters so a
+        # silent data-loss problem is visible instead of buried in a
+        # log file nobody reads. Reading them costs nothing (no flush).
+        dropped = getattr(recorder, '_dropped', 0)
         return jsonify({
             'status': 'ok',
             'version': APP_VERSION,
             'recording': recorder.recording,
             'sse_clients': app.sse_client_count(),
             'ts': time.time(),
+            'data_safety': {
+                'buffered_events': database.buffer_size(),
+                'session_flushed': database.total_flushed,
+                'sanitized_fields': database.sanitized_fields,
+                'bad_rows_skipped': database.bad_rows_skipped,
+                'overflow_drops': database.buffer_overflow_drops,
+                'flush_errors': database.flush_errors,
+                'recorder_drops': dropped,
+                'last_flush_ts': database.last_flush_ts,
+            },
         })
 
     # ── Messages (text history) ────────────────────────────────
@@ -313,7 +344,7 @@ def create_app(database, recorder, config, cloud_sync=None):
         actions = macro.get('actions', '[]')
         if isinstance(actions, str):
             actions = json.loads(actions)
-        threading.Thread(target=recorder.run_macro, args=(actions,),
+        threading.Thread(target=recorder.run_macro, args=(actions, mid),
                          daemon=True).start()
         return jsonify({'status': 'running'})
 

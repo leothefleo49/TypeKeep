@@ -484,6 +484,18 @@ async function loadStats() {
     el('stat-clicks').textContent   = fmt(d.total_mouse_clicks);
     el('stat-shortcuts').textContent = fmt(d.total_shortcuts);
     el('stat-dbsize').textContent   = d.db_size_mb + ' MB';
+    const sf = el('stat-safety');
+    if (sf) {
+      const issues = (d.bad_rows_skipped || 0) + (d.flush_errors || 0);
+      sf.textContent = issues === 0 ? 'Protected' : (issues + ' issues');
+      sf.style.color = issues === 0 ? 'var(--accent)' : '#f59e0b';
+      const card = el('stat-safety-card');
+      if (card) card.title = 'Sanitised fields: ' + (d.sanitized_fields || 0)
+        + ' | Bad rows isolated: ' + (d.bad_rows_skipped || 0)
+        + ' | Overflow drops: ' + (d.overflow_drops || 0)
+        + ' | Flush errors: ' + (d.flush_errors || 0)
+        + ' | Backups: ' + (d.backup_count || 0);
+    }
   } catch (_) {}
 }
 
@@ -1137,6 +1149,14 @@ function wireEvents() {
   });
   document.getElementById('cs-clip-type')?.addEventListener('change', () => {
     S.clipFilters.type = getCSValue('cs-clip-type'); loadClipboard();
+  });
+
+  // v3.3.0: press / anywhere (outside a field) to jump to search, Esc blurs
+  document.addEventListener('keydown', e => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
+    if (e.key === '/' && !typing) { e.preventDefault(); el('search-input').focus(); }
+    if (e.key === 'Escape' && document.activeElement === el('search-input')) el('search-input').blur();
   });
 
   // Search

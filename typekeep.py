@@ -212,8 +212,10 @@ def main():
 
     clipboard.set_broadcast_fn(app.broadcast_sse)
 
+    lan_access = bool(config.get('server_lan_access', False))
+    bind_host = '0.0.0.0' if lan_access else '127.0.0.1'
     threading.Thread(
-        target=lambda: app.run(host='0.0.0.0', port=port,
+        target=lambda: app.run(host=bind_host, port=port,
                                debug=False, use_reloader=False, threaded=True),
         daemon=True, name='flask-server',
     ).start()
@@ -222,53 +224,41 @@ def main():
     clipboard.start()
     cloud.start()
 
-    # Adaptive periodic loop: sleeps longer when idle, wakes faster when active.
-    # Designed to use <1% CPU/RAM during idle background operation.
-    # - Only flushes the buffer on every tick.
-    # - Only broadcasts SSE updates when (a) something new was written AND (b) a
-    #   client is actually listening. Saves wake-ups on both sides.
-    # - Adaptive sleep: 0.5s when actively buffering, ramps up to 5s when idle.
     def _periodic():
+        flush_sec = max(0.5, float(config.get('buffer_flush_seconds', 2) or 2))
         cleanup_interval = config.get('cleanup_interval_seconds', 3600)
         last_cleanup = time.time()
-        last_broadcast = 0.0
-        idle_streak = 0
+        last_broadcast = time.time()
         while True:
             try:
-                had_data = db.flush_buffer_returning_count() > 0
+                db.flush_buffer()
                 now = time.time()
-
-                if had_data and app.sse_client_count() and now - last_broadcast >= 1.0:
+                if app.sse_client_count() and now - last_broadcast >= 2:
                     try:
                         app.broadcast_sse('update', {'ts': now})
                     except Exception:
                         pass
                     last_broadcast = now
-
                 if now - last_cleanup >= cleanup_interval:
                     db.cleanup(config.get('retention_days', 30))
                     db.cleanup_clipboard(config.get('clipboard_retention_days', 30))
+                    db.checkpoint()
                     last_cleanup = now
-
                 if config.get('auto_backup_enabled', True):
                     db.maybe_backup()
-
-                if had_data:
-                    idle_streak = 0
-                    time.sleep(0.5)
-                else:
-                    idle_streak = min(idle_streak + 1, 10)
-                    time.sleep(min(5.0, 0.5 + idle_streak * 0.5))
             except Exception as exc:
                 print(f"[TypeKeep] periodic error: {exc}")
-                time.sleep(2.0)
+            time.sleep(max(0.5, float(config.get('buffer_flush_seconds', flush_sec) or flush_sec)))
 
     threading.Thread(target=_periodic, daemon=True, name='flush').start()
 
     print("=" * 48)
     print(f"  TypeKeep v{APP_VERSION} is running")
     print(f"  Dashboard -> http://127.0.0.1:{port}")
-    print(f"  LAN access -> http://{_get_lan_ip()}:{port}")
+    if lan_access:
+        print(f"  LAN access -> http://{_get_lan_ip()}:{port} (WARNING: LAN-exposed)")
+    else:
+        print("  LAN access -> disabled (loopback only; enable 'server_lan_access' for LAN)")
     if background_mode:
         print("  Mode: background (dashboard + recorder, no tray/browser)")
     else:

@@ -10,14 +10,20 @@ import os
 import shutil
 import glob as _glob
 
+from textutil import clean_text
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 DB_FILE = os.path.join(DATA_DIR, 'typekeep.db')
 BACKUP_DIR = os.path.join(DATA_DIR, 'backups')
 WAL_FILE = os.path.join(DATA_DIR, 'typekeep.db-wal')
 
-MAX_BACKUPS = 5
+MAX_BACKUPS = 3
 BACKUP_INTERVAL_SEC = 3600
+
+# Event types that must never be silently dropped by overflow/flood guards:
+# losing one of these loses actual typed text.
+PROTECTED_EVENT_TYPES = frozenset({'key_press', 'shortcut'})
 
 
 class Database:
@@ -30,7 +36,20 @@ class Database:
         self._local = threading.local()
         self._buffer = []
         self._buffer_lock = threading.Lock()
+        # v3.3.0: one process-wide write lock. Before this, the recorder
+        # writer thread, the periodic thread, cloud sync and Flask API
+        # handlers all flushed/wrote concurrently on separate connections,
+        # which produced the recurring "database is locked" errors in the
+        # live log even with WAL + busy_timeout.
+        self._write_lock = threading.RLock()
         self._last_backup = 0
+        # v3.3.0 diagnostics (surfaced via get_stats / /api/health)
+        self.total_flushed = 0
+        self.sanitized_fields = 0
+        self.bad_rows_skipped = 0
+        self.buffer_overflow_drops = 0
+        self.flush_errors = 0
+        self.last_flush_ts = 0.0
         self._init_db()
 
     # ── Connection ─────────────────────────────────────────────
@@ -44,7 +63,7 @@ class Database:
             conn.execute("PRAGMA wal_autocheckpoint=100")
             conn.execute("PRAGMA cache_size=-16000")
             conn.execute("PRAGMA temp_store=MEMORY")
-            conn.execute("PRAGMA busy_timeout=10000")
+            conn.execute("PRAGMA busy_timeout=30000")
             conn.execute("PRAGMA foreign_keys=ON")
             self._local.conn = conn
         return self._local.conn
@@ -113,22 +132,81 @@ class Database:
     # ── Buffered writes (crash-safe) ───────────────────────────
 
     def buffer_event(self, event: dict):
+        """Append-only. Flushing happens exclusively on background threads
+        (recorder writer / periodic flush) so callers can never block on
+        SQLite. A ceiling guards against runaway floods.
+
+        v3.3.0: the ceiling no longer blindly drops the oldest event -
+        that could be a keystroke. It drops the oldest *unprotected*
+        event (mouse move/scroll, notification) first, drops an incoming
+        unprotected event if the buffer is all protected, and only as a
+        last resort drops the oldest keystroke (counted, never silent).
+        """
         with self._buffer_lock:
+            if len(self._buffer) >= 5000:
+                incoming_protected = event.get('event_type') in PROTECTED_EVENT_TYPES
+                drop_idx = None
+                for i, old in enumerate(self._buffer):
+                    if old.get('event_type') not in PROTECTED_EVENT_TYPES:
+                        drop_idx = i
+                        break
+                if drop_idx is not None:
+                    self._buffer.pop(drop_idx)
+                    self.buffer_overflow_drops += 1
+                elif not incoming_protected:
+                    self.buffer_overflow_drops += 1
+                    return
+                else:
+                    self._buffer.pop(0)
+                    self.buffer_overflow_drops += 1
             self._buffer.append(event)
-            if len(self._buffer) >= 50:
-                self._flush_locked()
 
     def flush_buffer(self):
         with self._buffer_lock:
             self._flush_locked()
 
     def flush_buffer_returning_count(self):
-        """Flush and return how many events were written. Lets background loops
-        skip downstream work (SSE broadcasts, backups) when nothing happened."""
+        """Flush and report how many rows were actually written."""
         with self._buffer_lock:
-            count = len(self._buffer)
+            before = self.total_flushed
             self._flush_locked()
-        return count
+            return self.total_flushed - before
+
+    def buffer_size(self):
+        with self._buffer_lock:
+            return len(self._buffer)
+
+    def checkpoint(self):
+        """Truncate the WAL so it cannot grow unbounded (12MB+ observed)."""
+        try:
+            conn = self._get_conn()
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception as exc:
+            print(f"[TypeKeep] WAL checkpoint error: {exc}")
+
+    _INSERT_EVENT_SQL = """INSERT INTO events
+                   (timestamp,event_type,key_name,character,modifiers,
+                    window_title,window_process,extra)
+                   VALUES (?,?,?,?,?,?,?,?)"""
+
+    def _event_row(self, e):
+        """Build one insert row with every text field sanitised.
+
+        This is the v3.3.0 data-loss fix: a lone-surrogate character in
+        any field used to make sqlite's UTF-8 encoding raise, failing
+        the *entire* batch - which was then re-queued and failed again
+        forever, blocking all later typing from ever being saved.
+        """
+        row = []
+        for value in (e.get('key_name'), e.get('character'), e.get('modifiers'),
+                      e.get('window_title'), e.get('window_process'),
+                      e.get('extra')):
+            cleaned = clean_text(value)
+            if cleaned is not value and isinstance(value, str):
+                self.sanitized_fields += 1
+            row.append(cleaned)
+        return (e['timestamp'], e['event_type'], row[0], row[1], row[2],
+                row[3], row[4], row[5])
 
     def _flush_locked(self):
         """Must be called while holding _buffer_lock."""
@@ -136,22 +214,52 @@ class Database:
             return
         batch = list(self._buffer)
         self._buffer.clear()
+        rows = [self._event_row(e) for e in batch]
 
-        conn = self._get_conn()
-        try:
-            conn.executemany(
-                """INSERT INTO events
-                   (timestamp,event_type,key_name,character,modifiers,
-                    window_title,window_process,extra)
-                   VALUES (?,?,?,?,?,?,?,?)""",
-                [(e['timestamp'], e['event_type'], e['key_name'],
-                  e['character'], e['modifiers'], e['window_title'],
-                  e['window_process'], e.get('extra')) for e in batch]
-            )
-            conn.commit()
-        except Exception as exc:
-            print(f"[TypeKeep] DB flush error: {exc}")
-            self._buffer = batch + self._buffer
+        with self._write_lock:
+            conn = self._get_conn()
+            try:
+                conn.executemany(self._INSERT_EVENT_SQL, rows)
+                conn.commit()
+                self.total_flushed += len(rows)
+                self.last_flush_ts = time.time()
+                return
+            except Exception as exc:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                if 'locked' in str(exc).lower():
+                    # Transient contention: re-queue and let the next
+                    # flush retry - nothing is lost.
+                    self.flush_errors += 1
+                    print(f"[TypeKeep] DB flush deferred (locked): {exc}")
+                    self._buffer = batch + self._buffer
+                    return
+                print(f"[TypeKeep] DB flush batch error, isolating rows: {exc}")
+            # Poison-row isolation: one bad row must never block the rest.
+            # Insert row by row, keep the good ones, count + drop only the
+            # individual rows that still fail on their own.
+            written = 0
+            for row in rows:
+                try:
+                    conn.execute(self._INSERT_EVENT_SQL, row)
+                    written += 1
+                except Exception as row_exc:
+                    self.bad_rows_skipped += 1
+                    print(f"[TypeKeep] Skipping un-writable event row: {row_exc}")
+            try:
+                conn.commit()
+            except Exception as exc:
+                self.flush_errors += 1
+                print(f"[TypeKeep] DB flush commit error: {exc}")
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                return
+            self.total_flushed += written
+            self.last_flush_ts = time.time()
 
     # ── Auto-backup ────────────────────────────────────────────
 
@@ -161,6 +269,7 @@ class Database:
             return
         self._last_backup = now
         try:
+            self.checkpoint()
             ts = time.strftime('%Y%m%d_%H%M%S')
             dst = os.path.join(BACKUP_DIR, f'typekeep_{ts}.db')
             conn = self._get_conn()
@@ -208,11 +317,12 @@ class Database:
         return row['value'] if row else default
 
     def set_meta(self, key, value):
-        conn = self._get_conn()
-        conn.execute(
-            "INSERT OR REPLACE INTO app_meta (key, value) VALUES (?,?)",
-            (key, str(value)))
-        conn.commit()
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute(
+                "INSERT OR REPLACE INTO app_meta (key, value) VALUES (?,?)",
+                (key, str(value)))
+            conn.commit()
 
     # ── Raw event queries ──────────────────────────────────────
 
@@ -727,6 +837,14 @@ class Database:
             'oldest_event': oldest,
             'db_size_mb': db_size,
             'backup_count': backup_count,
+            # v3.3.0 data-safety diagnostics
+            'buffered_events': self.buffer_size(),
+            'session_flushed': self.total_flushed,
+            'sanitized_fields': self.sanitized_fields,
+            'bad_rows_skipped': self.bad_rows_skipped,
+            'overflow_drops': self.buffer_overflow_drops,
+            'flush_errors': self.flush_errors,
+            'last_flush_ts': self.last_flush_ts,
         }
 
     def get_apps(self, start_time=None, end_time=None):
@@ -764,9 +882,10 @@ class Database:
 
     def cleanup(self, retention_days):
         cutoff = time.time() - (retention_days * 86400)
-        conn = self._get_conn()
-        conn.execute("DELETE FROM events WHERE timestamp < ?", (cutoff,))
-        conn.commit()
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute("DELETE FROM events WHERE timestamp < ?", (cutoff,))
+            conn.commit()
 
     # ── Macros CRUD ────────────────────────────────────────────
 
@@ -856,16 +975,18 @@ class Database:
                             file_path=None, thumbnail_path=None,
                             source_app=None, source_title=None,
                             extra=None, device_id=None):
-        conn = self._get_conn()
-        cur = conn.execute(
-            """INSERT INTO clipboard_entries
-               (timestamp,content_type,content_text,file_path,thumbnail_path,
-                source_app,source_title,extra,device_id)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (time.time(), content_type, content_text, file_path,
-             thumbnail_path, source_app, source_title, extra, device_id))
-        conn.commit()
-        return cur.lastrowid
+        with self._write_lock:
+            conn = self._get_conn()
+            cur = conn.execute(
+                """INSERT INTO clipboard_entries
+                   (timestamp,content_type,content_text,file_path,thumbnail_path,
+                    source_app,source_title,extra,device_id)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (time.time(), content_type, clean_text(content_text), file_path,
+                 thumbnail_path, clean_text(source_app), clean_text(source_title),
+                 clean_text(extra), device_id))
+            conn.commit()
+            return cur.lastrowid
 
     def clipboard_entry_exists(self, content_type, content_text=None,
                                device_id=None, source_app=None,

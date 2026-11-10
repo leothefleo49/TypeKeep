@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/TypeKeep-v3.2.0-2dd4bf?style=for-the-badge" alt="TypeKeep v3.2.0">
+  <img src="https://img.shields.io/badge/TypeKeep-v3.3.0-2dd4bf?style=for-the-badge" alt="TypeKeep v3.2.0">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android%20%7C%20iOS-blue?style=for-the-badge" alt="Platforms">
 </p>
 
@@ -42,6 +42,16 @@
 </p>
 
 ---
+
+## What's New in v3.3.0 - Data-Safety Overhaul
+
+- **Fixed the #1 data-loss bug** - a single emoji/IME character arriving as a lone UTF-16 surrogate made the whole buffered batch fail UTF-8 encoding, get re-queued, and fail forever, silently blocking every later keystroke from being saved (the live log repeated `'utf-8' codec can't encode character '\ud83d'` endlessly). All text is now sanitised on the way in (`textutil.py`): valid surrogate pairs become the real emoji, lone surrogates become a harmless replacement character.
+- **Poison-row isolation** - if a batch insert ever fails for a non-lock reason, rows are retried individually; only the individual bad row is skipped (and counted), never the whole batch.
+- **No more "database is locked" flush errors** - one process-wide write lock now serialises the recorder writer, periodic flush, cloud sync and API-triggered flushes.
+- **Keystrokes can no longer be flood-dropped** - the input storm guard (which dropped 365 + 237 events in the live log) and the buffer/queue ceilings now sacrifice mouse/notification events first; `key_press`/`shortcut` events are protected.
+- **Visible data safety** - new counters (sanitised fields, bad rows isolated, overflow drops, flush errors, buffered events) in `/api/stats`, `/api/health`, and a new **Data Safety** card on the dashboard.
+- **Backup hygiene** - WAL is checkpointed before each backup and only the newest 3 backups are kept (was 5 full copies of a 50MB+ database).
+- **Dashboard** - press `/` to jump to search, `Esc` to leave it.
 
 ## What's New in v3.2.0
 

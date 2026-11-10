@@ -12,7 +12,7 @@ DATA_DIR = os.path.join(BASE_DIR, 'data')
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 CONFIG_BACKUP = os.path.join(DATA_DIR, 'config.backup.json')
 
-APP_VERSION = '3.2.0'
+APP_VERSION = '3.3.0'
 
 DEFAULTS = {
     # Recording
@@ -38,6 +38,7 @@ DEFAULTS = {
     # Retention & backup
     'retention_days': 30,
     'server_port': 7700,
+    'server_lan_access': False,
     'cleanup_interval_seconds': 3600,
     'buffer_flush_seconds': 2,
     'auto_save_interval': 1,
