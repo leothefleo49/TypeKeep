@@ -1,6 +1,6 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/TypeKeep-v3.3.0-2dd4bf?style=for-the-badge" alt="TypeKeep v3.2.0">
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android%20%7C%20iOS-blue?style=for-the-badge" alt="Platforms">
+  <img src="https://img.shields.io/badge/TypeKeep-v3.4.0-2dd4bf?style=for-the-badge" alt="TypeKeep v3.4.0">
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android%20%7C%20iOS%20%7C%20ChromeOS-blue?style=for-the-badge" alt="Platforms">
 </p>
 
 <h1 align="center">⌨ TypeKeep</h1>
@@ -42,6 +42,15 @@
 </p>
 
 ---
+
+## What's New in v3.4.0 - Reliability, Efficiency & Cross-Device Overhaul
+
+- **Zero Temp-Folder Data Loss (`paths.py`)** — Fixed the PyInstaller `--onefile` `_MEIPASS` bug by separating read-only bundled assets from persistent user data (`%LOCALAPPDATA%\TypeKeep\data`), with automatic safe migration of existing databases.
+- **Ultra-Low-Power Idle Background Mode** — Runs at `BelowNormal` priority on Windows, blocks cleanly with zero 4 Hz idle polling wakeups when not typing, uses adaptive idle backoff for clipboard & notifications, and pauses SSE wakeups when no dashboard tab is open.
+- **Accurate Text Reconstruction & Fixed Stuck Modifiers** — Reconciles physical `Ctrl`/`Alt`/`Shift`/`Win` state via `GetAsyncKeyState`, decodes `Ctrl+A..Z` control characters properly, includes editing shortcuts in `get_messages()`, and implements proper word-boundary `Ctrl+Backspace`, `Ctrl+Delete`, `Ctrl+Left`, and `Ctrl+Right`.
+- **Live Macro Hotkeys** — Saved macros with assigned shortcuts now trigger automatically when pressed.
+- **SQLite Performance & Concurrency** — Added covering composite indexes (`idx_events_type_ts`, `idx_events_type_proc_ts`) and full `_write_lock` coverage across all mutating CRUD methods.
+- **Hybrid LAN + Cloud Cross-Device Sync & Overhauled Mobile App** — Direct Wi-Fi LAN mode + bidirectional Cloud Sync (`_pull_messages` + `auto_copy_remote_clipboard`), offline SVG **Phone QR Pairing**, Quick Notes composer, Remote Desktop Macro execution, fixed 200-char card expansion truncation, and mobile search/filter bars.
 
 ## What's New in v3.3.0 - Data-Safety Overhaul
 

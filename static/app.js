@@ -16,7 +16,7 @@ const S = {
   activityEvents: [],
   filters: { time: '24h', gap: '5', app: '', sort: 'newest', search: '' },
   actFilters: { time: '24h', type: '' },
-  clipFilters: { time: '24h', type: '', pinned: false },
+  clipFilters: { time: '24h', type: '', pinned: false, search: '' },
   clipEntries: [], clipTotal: 0, clipHasMore: false, clipOffset: 0,
   syncInfo: {},
   pairedDevices: [],
@@ -585,7 +585,9 @@ function openSettings() {
   el('s-boot').checked        = s.start_on_boot ?? true;
   el('s-bg-boot').checked     = s.start_background_on_boot ?? true;
   el('s-ui-boot').checked     = s.start_ui_on_boot ?? false;
-  // Cloud sync
+  // Cloud & Network sync
+  el('s-lan-access').checked = s.server_lan_access ?? false;
+  el('s-auto-copy-remote').checked = s.auto_copy_remote_clipboard ?? false;
   el('s-supa-url').value      = s.supabase_url ?? '';
   el('s-supa-key').value      = s.supabase_anon_key ?? '';
   el('s-cloud-key').value     = s.cloud_sync_key ?? '';
@@ -622,7 +624,9 @@ async function saveSettings(options = {}) {
     start_on_boot:         el('s-boot').checked,
     start_background_on_boot: el('s-bg-boot').checked,
     start_ui_on_boot:      el('s-ui-boot').checked,
-    // Cloud sync
+    // Cloud & Network sync
+    server_lan_access:     el('s-lan-access').checked,
+    auto_copy_remote_clipboard: el('s-auto-copy-remote').checked,
     supabase_url:          el('s-supa-url').value.trim().replace(/\/$/, ''),
     supabase_anon_key:     el('s-supa-key').value.trim(),
     cloud_sync_key:        el('s-cloud-key').value.trim(),
@@ -642,7 +646,11 @@ async function saveSettings(options = {}) {
     S.filters.context_aware = data.context_aware_grouping ? 'true' : 'false';
     S.filters.smart_enter = data.smart_enter ? 'true' : 'false';
     updateFilterButtons();
-    if (!quiet) toast('Settings saved');
+    if (!quiet) {
+      toast(r.restart_required
+        ? 'Settings saved — restart TypeKeep to apply LAN binding change'
+        : 'Settings saved');
+    }
     if (closeAfter) closeSettings();
     S._forceRender = true;
     loadMessages();
@@ -848,16 +856,13 @@ async function skipOnboarding() {
    ══════════════════════════════════════════════════════════════ */
 async function loadClipboard(append = false) {
   try {
-    const ranges = { '1h': 3600, '3h': 10800, '6h': 21600, '12h': 43200,
-                     '24h': 86400, '3d': 259200, '7d': 604800, '30d': 2592000 };
-    const now = Date.now() / 1000;
-    const secs = ranges[S.clipFilters.time];
     const p = new URLSearchParams({
+      range: S.clipFilters.time || '24h',
       limit: 60, offset: append ? S.clipOffset : 0,
     });
-    if (secs) { p.set('start', now - secs); p.set('end', now); }
     if (S.clipFilters.type) p.set('type', S.clipFilters.type);
     if (S.clipFilters.pinned) p.set('pinned', '1');
+    if (S.clipFilters.search) p.set('search', S.clipFilters.search);
 
     const d = await api('/api/clipboard?' + p);
     S.clipEntries = append ? S.clipEntries.concat(d.entries) : d.entries;
@@ -945,7 +950,8 @@ function toggleClipPinFilter() {
 async function copyClipEntry(btn, id) {
   const e = S.clipEntries.find(x => x.id === id);
   if (!e || !e.content_text) return;
-  copyToClipboard(e.content_text).then(() => {
+  copyToClipboard(e.content_text).then(async () => {
+    api(`/api/clipboard/${id}/copy-to-os`, { method: 'POST' }).catch(() => {});
     btn.classList.add('copied');
     btn.innerHTML = svgCheck;
     setTimeout(() => { btn.classList.remove('copied'); btn.innerHTML = svgCopy; }, 1600);
@@ -997,6 +1003,38 @@ async function loadSyncInfo() {
     el('sync-clipboard').checked = !!d.clipboard_sync;
   } catch (_) {}
   loadDevices();
+  loadSyncQR();
+}
+
+async function loadSyncQR() {
+  const box = el('sync-qr-box');
+  const urlInput = el('qr-pair-url');
+  const statusEl = el('qr-lan-status');
+  if (!box) return;
+  try {
+    const d = await api('/api/sync/qr');
+    if (urlInput) urlInput.value = d.pair_url || '';
+    if (d.qr_svg) {
+      box.innerHTML = d.qr_svg;
+      const svg = box.querySelector('svg');
+      if (svg) { svg.style.width = '140px'; svg.style.height = '140px'; svg.style.display = 'block'; }
+    } else {
+      box.textContent = d.lan_url || 'QR unavailable';
+    }
+    if (statusEl) {
+      statusEl.textContent = d.lan_access
+        ? `LAN server active on ${(d.lan_ips || []).join(', ')}:${d.port}`
+        : 'LAN direct access is off (only loopback 127.0.0.1 active). Enable it in Settings → Cloud & Network Sync to connect phones over Wi-Fi.';
+    }
+  } catch (_) {
+    box.textContent = 'Unavailable';
+  }
+}
+
+function copyQrUrl() {
+  const v = el('qr-pair-url')?.value;
+  if (!v) return;
+  copyToClipboard(v).then(() => toast('Pairing URL copied!'));
 }
 
 async function loadDevices() {
@@ -1150,6 +1188,9 @@ function wireEvents() {
   document.getElementById('cs-clip-type')?.addEventListener('change', () => {
     S.clipFilters.type = getCSValue('cs-clip-type'); loadClipboard();
   });
+  document.getElementById('clip-search-input')?.addEventListener('input', debounce(e => {
+    S.clipFilters.search = e.target.value; loadClipboard();
+  }, DEBOUNCE_MS));
 
   // v3.3.0: press / anywhere (outside a field) to jump to search, Esc blurs
   document.addEventListener('keydown', e => {

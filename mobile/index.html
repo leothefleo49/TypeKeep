@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="TypeKeep">
-  <meta name="description" content="TypeKeep — Cross-device clipboard sync & typing history companion">
+  <meta name="description" content="TypeKeep — Cross-device clipboard sync, typing history & remote companion">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icon-192.png">
   <title>TypeKeep</title>
@@ -21,18 +21,28 @@
       <div class="setup-container">
         <div class="setup-logo">⌨</div>
         <h1>TypeKeep</h1>
-        <p class="setup-subtitle">Enter the same sync key you set on your desktop TypeKeep to connect your devices.</p>
+        <p class="setup-subtitle">Connect via Cloud Sync Key (works anywhere) or Direct PC LAN (instant over Wi-Fi).</p>
 
         <div class="setup-form">
+          <div id="lan-quick-banner" class="lan-banner" style="display:none">
+            <div style="font-weight:600;color:var(--accent);margin-bottom:4px">PC Detected on Same Network</div>
+            <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px" id="lan-banner-host"></p>
+            <button class="btn-primary" onclick="connectQuickLan()">Connect Directly to This PC</button>
+          </div>
+
           <div class="field">
-            <label>Sync Key (same as your desktop)</label>
+            <label>Sync Key (same passphrase as your desktop)</label>
             <input type="text" id="setup-sync-key" placeholder="my-secret-passphrase" autocomplete="off">
+          </div>
+          <div class="field">
+            <label>PC LAN URL (optional, e.g. http://192.168.1.50:7700)</label>
+            <input type="url" id="setup-lan-url" placeholder="http://192.168.1.x:7700" autocomplete="off" class="mono">
           </div>
           <div class="field">
             <label>Device Name</label>
             <input type="text" id="setup-device-name" placeholder="My Phone" value="">
           </div>
-          <button class="btn-primary" onclick="connectCloud()">Connect</button>
+          <button class="btn-primary" onclick="connectAccount()">Connect</button>
           <p id="setup-error" class="error-text" style="display:none"></p>
         </div>
 
@@ -40,12 +50,9 @@
           <details>
             <summary>How to set up sync</summary>
             <ol>
-              <li>On your desktop, open TypeKeep dashboard → <strong>Settings</strong></li>
-              <li>Scroll to <strong>Cloud Sync</strong> section</li>
-              <li>Enter a <strong>Sync Key</strong> (any passphrase you choose)</li>
-              <li>Check <strong>Enable cloud sync</strong> and save</li>
-              <li>Enter the <strong>same sync key</strong> above on your phone</li>
-              <li>Done! Your devices are now connected</li>
+              <li>On your PC, open TypeKeep dashboard → <strong>Devices</strong> or <strong>Settings</strong></li>
+              <li>For Wi-Fi instant sync: turn on <strong>Allow LAN direct connection</strong>, then scan the QR code in Devices</li>
+              <li>For anywhere cloud sync: pick a <strong>Sync Key</strong>, check <strong>Enable cloud sync</strong>, and enter the same key above</li>
             </ol>
           </details>
         </div>
@@ -60,6 +67,7 @@
         <div class="header-left">
           <span class="logo">⌨</span>
           <span class="title">TypeKeep</span>
+          <span class="mode-pill" id="conn-mode-pill">Cloud</span>
         </div>
         <div class="header-right">
           <button class="icon-btn" onclick="refreshData()" title="Refresh">
@@ -106,13 +114,13 @@
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
           </svg>
-          <span>Devices</span>
+          <span>PC &amp; Macros</span>
         </button>
         <button class="tab" data-tab="add" onclick="switchTab('add')">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
           </svg>
-          <span>Add</span>
+          <span>Send</span>
         </button>
       </nav>
 
@@ -122,11 +130,14 @@
           <h2>Synced Clipboard</h2>
           <span class="badge" id="clip-count">0</span>
         </div>
+        <div class="search-bar-row">
+          <input type="search" id="m-clip-search" class="mobile-search" placeholder="Search clipboard..." oninput="renderClipboard()">
+        </div>
         <div id="clipboard-list" class="card-list"></div>
         <div id="clipboard-empty" class="empty-state" style="display:none">
           <div class="empty-icon">📋</div>
           <h3>No clipboard entries yet</h3>
-          <p>Copy something on your desktop — it'll appear here via cloud sync.</p>
+          <p>Copy something on your PC or send from the Send tab — it'll appear here.</p>
         </div>
       </div>
 
@@ -136,39 +147,64 @@
           <h2>Typing History</h2>
           <span class="badge" id="msg-count">0</span>
         </div>
+        <div class="search-bar-row">
+          <input type="search" id="m-msg-search" class="mobile-search" placeholder="Search messages or app..." oninput="renderMessages()">
+        </div>
         <div id="history-list" class="card-list"></div>
         <div id="history-empty" class="empty-state" style="display:none">
           <div class="empty-icon">⌨️</div>
           <h3>No typing history yet</h3>
-          <p>Your desktop TypeKeep will sync typing history here automatically.</p>
+          <p>Your PC's typing history syncs here via Direct LAN or Cloud Sync.</p>
         </div>
       </div>
 
-      <!-- Tab: Devices -->
+      <!-- Tab: Devices & Remote Macros -->
       <div id="tab-devices" class="tab-panel">
+        <div id="pc-control-box" style="display:none;margin-bottom:18px">
+          <div class="section-header">
+            <h2>PC Remote Control</h2>
+            <span class="badge" id="pc-rec-badge">—</span>
+          </div>
+          <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+            <div>
+              <div style="font-size:13px;font-weight:600" id="pc-stats-line">PC Stats loading...</div>
+              <div style="font-size:11px;color:var(--text-dim)" id="pc-host-line"></div>
+            </div>
+            <button class="btn-secondary" style="width:auto;padding:8px 14px" onclick="togglePcRecording()">Toggle Rec</button>
+          </div>
+          <div class="section-header" style="margin-top:14px">
+            <h2>Desktop Macros</h2>
+            <span class="badge" id="macro-count">0</span>
+          </div>
+          <div id="mobile-macro-list" class="card-list"></div>
+        </div>
+
         <div class="section-header">
           <h2>Connected Devices</h2>
         </div>
         <div id="devices-list" class="card-list"></div>
         <div id="devices-empty" class="empty-state" style="display:none">
           <div class="empty-icon">🔗</div>
-          <h3>No other devices</h3>
-          <p>Set up TypeKeep on another device with the same sync key.</p>
+          <h3>No cloud devices</h3>
+          <p>Enable Cloud Sync on multiple devices with the same sync key.</p>
         </div>
       </div>
 
-      <!-- Tab: Add Clipboard -->
+      <!-- Tab: Send / Quick Note -->
       <div id="tab-add" class="tab-panel">
         <div class="section-header">
-          <h2>Add to Clipboard</h2>
+          <h2>Send Text &amp; Notes to PC</h2>
         </div>
         <div class="add-form">
-          <textarea id="add-text" placeholder="Type or paste text to sync to all devices..." rows="6"></textarea>
-          <button class="btn-primary" onclick="addClipboardEntry()">
+          <textarea id="add-text" placeholder="Type a note, link, or paste from your phone to send straight to your PC..." rows="6"></textarea>
+          <button class="btn-primary" onclick="sendToAllDevices('clipboard')">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
             </svg>
-            Send to All Devices
+            Send to PC Clipboard
+          </button>
+          <button class="btn-secondary" onclick="sendToAllDevices('note')">
+            📝 Save as Quick Note in Typing History
           </button>
           <button class="btn-secondary" onclick="pasteFromClipboard()">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
@@ -191,8 +227,12 @@
         </div>
         <div class="settings-body">
           <div class="field">
-            <label>Sync Key</label>
+            <label>Cloud Sync Key</label>
             <input type="text" id="s-sync-key">
+          </div>
+          <div class="field">
+            <label>Direct PC LAN URL (optional)</label>
+            <input type="url" id="s-lan-url" placeholder="http://192.168.1.x:7700" class="mono">
           </div>
           <div class="field">
             <label>Device Name</label>
@@ -201,7 +241,7 @@
           <button class="btn-primary" onclick="saveSettings()">Save</button>
           <button class="btn-danger" onclick="disconnect()">Disconnect</button>
           <div class="app-info">
-            <p>TypeKeep v3.2.0</p>
+            <p>TypeKeep v3.4.0</p>
             <p><a href="https://github.com/leothefleo49/TypeKeep" target="_blank">GitHub</a></p>
           </div>
         </div>

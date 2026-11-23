@@ -24,8 +24,11 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'app', 'index.html'));
 
+  const startHidden = process.argv.includes('--hidden') || process.argv.includes('--minimized');
   mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
+    if (!startHidden) {
+      mainWindow.show();
+    }
   });
 
   mainWindow.on('close', (e) => {

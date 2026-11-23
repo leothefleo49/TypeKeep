@@ -169,6 +169,7 @@
           <div class="cs-option" data-value="files">Files</div>
         </div>
       </div>
+      <input type="text" id="clip-search-input" placeholder="Search clipboard..." autocomplete="off" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);color:var(--txt);min-width:180px;font-size:.82rem">
       <div class="filter-actions">
         <button class="btn-ghost-sm" id="clip-pin-filter" onclick="toggleClipPinFilter()">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
@@ -273,6 +274,23 @@
           <div class="field-check"><input type="checkbox" id="sync-enabled"><label for="sync-enabled">Enable sync</label></div>
           <div class="field-check"><input type="checkbox" id="sync-clipboard"><label for="sync-clipboard">Sync clipboard across devices</label></div>
           <button class="btn-accent" onclick="saveSyncSettings()" style="margin-top:8px">Save Sync Settings</button>
+        </div>
+      </div>
+
+      <!-- QR Code Phone Pairing -->
+      <div class="pair-section" id="qr-pair-section" style="margin-top:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+          <div style="flex:1;min-width:240px">
+            <h3>Connect Phone or Tablet</h3>
+            <p class="hint">Scan this QR code on Wi-Fi (enable <strong>Allow LAN direct connection</strong> in Settings → Cloud &amp; Network Sync) or open the link in your phone browser and tap <em>Add to Home Screen</em>.</p>
+            <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
+              <input type="text" id="qr-pair-url" readonly class="mono" style="flex:1;min-width:200px;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--txt);font-size:12px">
+              <button class="btn-ghost-sm" onclick="copyQrUrl()">Copy Link</button>
+              <button class="btn-ghost-sm" onclick="loadSyncQR()">Refresh</button>
+            </div>
+            <p class="hint" id="qr-lan-status" style="margin-top:6px"></p>
+          </div>
+          <div id="sync-qr-box" style="background:#ffffff;padding:10px;border-radius:12px;min-width:150px;min-height:150px;display:flex;align-items:center;justify-content:center;color:#0f172a;font-size:12px">Loading QR...</div>
         </div>
       </div>
 
@@ -396,9 +414,11 @@
         <p class="hint">Permanently delete all recorded events. This cannot be undone.</p>
       </fieldset>
       <fieldset>
-        <legend>Cloud Sync</legend>
-        <p class="hint" style="margin-bottom:10px">Sync clipboard &amp; history across all your devices (desktop, Android, iOS). Just pick a sync key and enable it!</p>
-        <div class="field"><label>Sync Key (shared passphrase — same on all devices)</label><input type="text" id="s-cloud-key" placeholder="pick-any-passphrase"></div>
+        <legend>Cloud &amp; Network Sync</legend>
+        <p class="hint" style="margin-bottom:10px">Sync clipboard &amp; history across all your devices (desktop, Android, iOS). Use Cloud Sync anywhere or Direct LAN over home Wi-Fi!</p>
+        <div class="field-check"><input type="checkbox" id="s-lan-access"><label for="s-lan-access">Allow LAN / Phone direct connection (restart required)</label></div>
+        <div class="field-check"><input type="checkbox" id="s-auto-copy-remote"><label for="s-auto-copy-remote">Auto-copy incoming remote clips to Windows clipboard</label></div>
+        <div class="field" style="margin-top:8px"><label>Sync Key (shared passphrase — same on all devices)</label><input type="text" id="s-cloud-key" placeholder="pick-any-passphrase"></div>
         <div class="field-check"><input type="checkbox" id="s-cloud-enabled"><label for="s-cloud-enabled">Enable cloud sync</label></div>
         <div class="field-check"><input type="checkbox" id="s-cloud-clipboard" checked><label for="s-cloud-clipboard">Sync clipboard to cloud</label></div>
         <div class="field-check"><input type="checkbox" id="s-cloud-messages" checked><label for="s-cloud-messages">Sync typing history to cloud</label></div>

@@ -160,12 +160,24 @@ function createRelease(version, artifactPath) {
   const title = tag;
   const notes = NOTES || `TypeKeep ${tag} release`;
 
-  let files = '';
-  if (artifactPath && fs.existsSync(artifactPath)) {
-    files = `"${artifactPath}"`;
+  const relDir = path.join(ROOT, 'dist-release');
+  if (!fs.existsSync(relDir)) fs.mkdirSync(relDir, { recursive: true });
+  const srcZip = path.join(relDir, `TypeKeep-v${version}-source.zip`);
+  run(`git archive --format zip --output "${srcZip}" HEAD`, { ignoreError: true });
+
+  const fileList = [];
+  if (fs.existsSync(relDir)) {
+    for (const f of fs.readdirSync(relDir)) {
+      const fp = path.join(relDir, f);
+      if (fs.statSync(fp).isFile()) fileList.push(`"${fp}"`);
+    }
+  }
+  if (artifactPath && fs.existsSync(artifactPath) && !fileList.some(x => x.includes(path.basename(artifactPath)))) {
+    fileList.push(`"${artifactPath}"`);
   }
 
-  const cmd = `gh release create ${tag} ${files} --title "${title}" --notes "${notes}" --target main --latest`;
+  run(`gh release delete ${tag} --yes`, { ignoreError: true });
+  const cmd = `gh release create ${tag} ${fileList.join(' ')} --title "${title}" --notes "${notes}" --target main --latest`;
   run(cmd);
 }
 

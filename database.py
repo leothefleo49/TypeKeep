@@ -10,12 +10,10 @@ import os
 import shutil
 import glob as _glob
 
+from paths import DATA_DIR, BACKUP_DIR
 from textutil import clean_text
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, 'data')
 DB_FILE = os.path.join(DATA_DIR, 'typekeep.db')
-BACKUP_DIR = os.path.join(DATA_DIR, 'backups')
 WAL_FILE = os.path.join(DATA_DIR, 'typekeep.db-wal')
 
 MAX_BACKUPS = 3
@@ -85,6 +83,8 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_events_ts   ON events(timestamp);
             CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
             CREATE INDEX IF NOT EXISTS idx_events_proc ON events(window_process);
+            CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(event_type, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_events_type_proc_ts ON events(event_type, window_process, timestamp);
 
             CREATE TABLE IF NOT EXISTS macros (
                 id   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,6 +126,20 @@ class Database:
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS remote_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT,
+                device_name TEXT,
+                final_text TEXT NOT NULL,
+                app TEXT,
+                win_title TEXT,
+                start_time REAL NOT NULL,
+                end_time REAL NOT NULL,
+                keystroke_count INTEGER DEFAULT 0,
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_remote_msg_ts ON remote_messages(start_time);
         """)
         conn.commit()
 
@@ -179,8 +193,9 @@ class Database:
     def checkpoint(self):
         """Truncate the WAL so it cannot grow unbounded (12MB+ observed)."""
         try:
-            conn = self._get_conn()
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            with self._write_lock:
+                conn = self._get_conn()
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except Exception as exc:
             print(f"[TypeKeep] WAL checkpoint error: {exc}")
 
@@ -363,13 +378,53 @@ class Database:
 
     # ── Context-aware message grouping ─────────────────────────
 
+    @staticmethod
+    def _is_editing_shortcut(ev) -> bool:
+        """True if a 'shortcut' event is a Ctrl editing action that affects text."""
+        mods = (ev.get('modifiers') or '').lower()
+        if 'ctrl' not in mods or 'alt' in mods or 'cmd' in mods:
+            return False
+        ch = ev.get('character') or ''
+        if ch and len(ch) == 1 and 1 <= ord(ch) <= 26:
+            ch = chr(ord(ch) + 96)
+        ch_low = ch.lower()
+        kn = (ev.get('key_name') or '').lower().replace('key.', '')
+        if ch_low in ('a', 'x'):
+            return True
+        return any(k in kn for k in ('backspace', 'delete', 'left', 'right', 'home', 'end'))
+
     def get_messages(self, gap_seconds=5, same_window_gap=30,
                      start_time=None, end_time=None,
                      process=None, search=None, min_length=1,
                      sort='newest', limit=50, offset=0,
                      split_on_enter=False, context_aware=True,
                      smart_enter=True):
-        events = self.get_events(start_time, end_time, 'key_press', process)
+        conn = self._get_conn()
+        clauses = ["event_type IN ('key_press', 'shortcut')"]
+        params = []
+        if start_time is not None:
+            clauses.append("timestamp >= ?"); params.append(start_time)
+        if end_time is not None:
+            clauses.append("timestamp <= ?"); params.append(end_time)
+        if process:
+            clauses.append("window_process = ?"); params.append(process)
+
+        if start_time is None:
+            # Cap unbounded all-time queries to the most recent 150k text events
+            # so half-million+ row databases remain instant.
+            sql = (f"SELECT * FROM events WHERE {' AND '.join(clauses)} "
+                   f"ORDER BY timestamp DESC LIMIT 150000")
+            raw_events = [dict(r) for r in conn.execute(sql, params).fetchall()]
+            raw_events.reverse()
+        else:
+            sql = f"SELECT * FROM events WHERE {' AND '.join(clauses)} ORDER BY timestamp ASC"
+            raw_events = [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+        events = [
+            ev for ev in raw_events
+            if ev.get('event_type') == 'key_press' or self._is_editing_shortcut(ev)
+        ]
+
         groups = self._group_events_context_aware(
             events, gap_seconds, same_window_gap,
             split_on_enter, context_aware, smart_enter,
@@ -380,18 +435,89 @@ class Database:
             if msg and len(msg['final_text'].strip()) >= min_length:
                 messages.append(msg)
 
+        # Merge quick notes / remote synced messages
+        for rm in self.get_remote_messages(start_time=start_time, end_time=end_time,
+                                           process=process):
+            if len((rm.get('final_text') or '').strip()) >= min_length:
+                messages.append(rm)
+
         if search:
             q = search.lower()
             messages = [m for m in messages
                         if q in m['final_text'].lower()
                         or q in m['raw_text'].lower()]
 
-        if sort == 'newest':
-            messages.reverse()
+        messages.sort(key=lambda m: m['start_time'], reverse=(sort == 'newest'))
 
         total = len(messages)
         page = messages[offset:offset + limit]
         return page, total
+
+    def add_remote_message(self, final_text, device_id=None, device_name=None,
+                           app='TypeKeep Mobile', win_title='',
+                           start_time=None, end_time=None, keystroke_count=0):
+        now = time.time()
+        st = float(start_time) if start_time is not None else now
+        et = float(end_time) if end_time is not None else st
+        with self._write_lock:
+            conn = self._get_conn()
+            cur = conn.execute(
+                """INSERT INTO remote_messages
+                   (device_id, device_name, final_text, app, win_title,
+                    start_time, end_time, keystroke_count, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (device_id, clean_text(device_name), clean_text(final_text),
+                 clean_text(app), clean_text(win_title),
+                 st, et, int(keystroke_count or len(final_text or '')), now),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def remote_message_exists(self, final_text, device_id=None, start_time=None):
+        conn = self._get_conn()
+        clauses = ["final_text = ?"]
+        params = [clean_text(final_text)]
+        if device_id is not None:
+            clauses.append("device_id = ?"); params.append(device_id)
+        if start_time is not None:
+            clauses.append("ABS(start_time - ?) < 2.0"); params.append(float(start_time))
+        row = conn.execute(
+            f"SELECT id FROM remote_messages WHERE {' AND '.join(clauses)} LIMIT 1",
+            params,
+        ).fetchone()
+        return bool(row)
+
+    def get_remote_messages(self, start_time=None, end_time=None, process=None):
+        conn = self._get_conn()
+        clauses, params = ["1=1"], []
+        if start_time is not None:
+            clauses.append("start_time >= ?"); params.append(start_time)
+        if end_time is not None:
+            clauses.append("end_time <= ?"); params.append(end_time)
+        if process:
+            clauses.append("app = ?"); params.append(process)
+        rows = conn.execute(
+            f"SELECT * FROM remote_messages WHERE {' AND '.join(clauses)} ORDER BY start_time ASC LIMIT 500",
+            params,
+        ).fetchall()
+        out = []
+        for r in rows:
+            txt = r['final_text'] or ''
+            dname = r['device_name'] or r['device_id'] or 'Remote'
+            title = r['win_title'] or f'[{dname}]'
+            out.append({
+                'start_time': r['start_time'],
+                'end_time': r['end_time'],
+                'final_text': txt,
+                'raw_text': txt,
+                'chrono_text': f"[{time.strftime('%H:%M:%S', time.localtime(r['start_time']))}] {txt}",
+                'app': r['app'] or dname,
+                'window': title,
+                'keystroke_count': r['keystroke_count'] or len(txt),
+                'duration': max(0.0, round((r['end_time'] or r['start_time']) - r['start_time'], 2)),
+                'remote': True,
+            })
+        return out
 
     # ── Context classification helpers ─────────────────────────
 
@@ -418,13 +544,17 @@ class Database:
 
     @staticmethod
     def _compute_typing_speed(events, window=10):
-        text_events = [e for e in events if Database._is_text_input_key(e)]
-        if len(text_events) < 2:
-            return 0.0
-        recent = text_events[-window:]
+        # Scan backwards and stop once *window* text events are collected so
+        # grouping stays O(1) per keystroke instead of O(N^2) on long sessions.
+        recent = []
+        for e in reversed(events):
+            if Database._is_text_input_key(e):
+                recent.append(e)
+                if len(recent) >= window:
+                    break
         if len(recent) < 2:
             return 0.0
-        dt = recent[-1]['timestamp'] - recent[0]['timestamp']
+        dt = recent[0]['timestamp'] - recent[-1]['timestamp']
         if dt <= 0:
             return 999.0
         return len(recent) / dt
@@ -565,12 +695,50 @@ class Database:
         }
 
     @staticmethod
+    def _is_word_char(c: str) -> bool:
+        return bool(c) and (c.isalnum() or c == '_')
+
+    @staticmethod
+    def _prev_word_boundary(buf, pos: int) -> int:
+        if pos <= 0:
+            return 0
+        if buf[pos - 1] == '\n':
+            return pos - 1
+        while pos > 0 and buf[pos - 1] in (' ', '\t'):
+            pos -= 1
+        if pos > 0:
+            if Database._is_word_char(buf[pos - 1]):
+                while pos > 0 and Database._is_word_char(buf[pos - 1]):
+                    pos -= 1
+            elif buf[pos - 1] != '\n':
+                while pos > 0 and not Database._is_word_char(buf[pos - 1]) and buf[pos - 1] not in (' ', '\t', '\n'):
+                    pos -= 1
+        return pos
+
+    @staticmethod
+    def _next_word_boundary(buf, pos: int) -> int:
+        n = len(buf)
+        if pos >= n:
+            return n
+        if buf[pos] == '\n':
+            return pos + 1
+        if Database._is_word_char(buf[pos]):
+            while pos < n and Database._is_word_char(buf[pos]):
+                pos += 1
+        elif buf[pos] not in (' ', '\t'):
+            while pos < n and not Database._is_word_char(buf[pos]) and buf[pos] not in (' ', '\t', '\n'):
+                pos += 1
+        while pos < n and buf[pos] in (' ', '\t'):
+            pos += 1
+        return pos
+
+    @staticmethod
     def _reconstruct_final(events):
         """Rebuild text with cursor-position-aware editing.
 
         Handles: regular chars, backspace, delete, arrow keys, Home, End,
-        Ctrl+Home, Ctrl+End (jump to start/end of buffer), Ctrl+A (select all
-        then next char replaces), and proper multiline Home/End behavior.
+        Ctrl+Home, Ctrl+End, Ctrl+Left/Right (word jump), Ctrl+Backspace/Delete
+        (word deletion), Ctrl+A (select all then replace/delete), and multiline Home/End.
         """
         buf = []
         cur = 0
@@ -585,19 +753,40 @@ class Database:
             has_alt = 'alt' in mods
 
             if has_ctrl and not has_alt:
-                if ch and ch.lower() == 'a':
+                if ch and len(ch) == 1 and 1 <= ord(ch) <= 26:
+                    ch = chr(ord(ch) + 96)
+                ch_low = ch.lower() if ch else ''
+                kn_clean = kn.replace('key.', '')
+                if not ch_low and len(kn_clean) == 1:
+                    ch_low = kn_clean
+
+                if ch_low == 'a':
                     select_all = True
                     continue
-                if ch and ch.lower() in ('c', 'v', 'x', 'z', 'y', 's', 'f', 'h'):
-                    if ch.lower() == 'v':
-                        pass
+                if ch_low == 'x':
+                    if select_all:
+                        buf.clear()
+                        cur = 0
+                        select_all = False
+                    continue
+                if ch_low in ('c', 'v', 'z', 'y', 's', 'f', 'h'):
                     continue
 
                 if 'home' in kn:
+                    select_all = False
                     cur = 0
                     continue
                 if 'end' in kn:
+                    select_all = False
                     cur = len(buf)
+                    continue
+                if 'left' in kn:
+                    select_all = False
+                    cur = Database._prev_word_boundary(buf, cur)
+                    continue
+                if 'right' in kn:
+                    select_all = False
+                    cur = Database._next_word_boundary(buf, cur)
                     continue
 
                 if 'backspace' in kn:
@@ -606,11 +795,9 @@ class Database:
                         cur = 0
                         select_all = False
                         continue
-                    line_start = cur
-                    while line_start > 0 and buf[line_start - 1] != '\n':
-                        line_start -= 1
-                    buf[line_start:cur] = []
-                    cur = line_start
+                    new_cur = Database._prev_word_boundary(buf, cur)
+                    del buf[new_cur:cur]
+                    cur = new_cur
                     continue
 
                 if 'delete' in kn:
@@ -619,10 +806,8 @@ class Database:
                         cur = 0
                         select_all = False
                         continue
-                    line_end = cur
-                    while line_end < len(buf) and buf[line_end] != '\n':
-                        line_end += 1
-                    buf[cur:line_end] = []
+                    end_pos = Database._next_word_boundary(buf, cur)
+                    del buf[cur:end_pos]
                     continue
 
                 continue
@@ -817,12 +1002,16 @@ class Database:
         conn = self._get_conn()
         now = time.time()
         day_ago = now - 86400
-        total = conn.execute("SELECT COUNT(*) c FROM events").fetchone()['c']
+        # Uses covering index idx_events_type instead of multiple full scans
+        counts = {r['event_type']: r['c'] for r in conn.execute(
+            "SELECT event_type, COUNT(*) c FROM events GROUP BY event_type"
+        ).fetchall()}
+        total = sum(counts.values())
+        keys = counts.get('key_press', 0)
+        clicks = counts.get('mouse_click', 0)
+        shortcuts = counts.get('shortcut', 0)
         today = conn.execute("SELECT COUNT(*) c FROM events WHERE timestamp>=?",
                              (day_ago,)).fetchone()['c']
-        keys = conn.execute("SELECT COUNT(*) c FROM events WHERE event_type='key_press'").fetchone()['c']
-        clicks = conn.execute("SELECT COUNT(*) c FROM events WHERE event_type='mouse_click'").fetchone()['c']
-        shortcuts = conn.execute("SELECT COUNT(*) c FROM events WHERE event_type='shortcut'").fetchone()['c']
         oldest = conn.execute("SELECT MIN(timestamp) m FROM events").fetchone()['m']
         db_size = 0
         if os.path.exists(DB_FILE):
@@ -837,7 +1026,7 @@ class Database:
             'oldest_event': oldest,
             'db_size_mb': db_size,
             'backup_count': backup_count,
-            # v3.3.0 data-safety diagnostics
+            # v3.3.0+ data-safety diagnostics
             'buffered_events': self.buffer_size(),
             'session_flushed': self.total_flushed,
             'sanitized_fields': self.sanitized_fields,
@@ -862,23 +1051,27 @@ class Database:
     # ── Delete operations ──────────────────────────────────────
 
     def delete_events_range(self, start_time, end_time, process=None):
-        conn = self._get_conn()
-        clauses = ["timestamp >= ?", "timestamp <= ?"]
-        params = [start_time, end_time]
-        if process:
-            clauses.append("window_process = ?"); params.append(process)
-        conn.execute(f"DELETE FROM events WHERE {' AND '.join(clauses)}", params)
-        conn.commit()
-        return conn.total_changes
+        with self._write_lock:
+            conn = self._get_conn()
+            clauses = ["timestamp >= ?", "timestamp <= ?"]
+            params = [start_time, end_time]
+            if process:
+                clauses.append("window_process = ?"); params.append(process)
+            before = conn.total_changes
+            conn.execute(f"DELETE FROM events WHERE {' AND '.join(clauses)}", params)
+            conn.commit()
+            return conn.total_changes - before
 
     def delete_all_events(self):
-        conn = self._get_conn()
-        conn.execute("DELETE FROM events")
-        conn.commit()
-        try:
-            conn.execute("VACUUM")
-        except Exception:
-            pass
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute("DELETE FROM events")
+            conn.execute("DELETE FROM remote_messages")
+            conn.commit()
+            try:
+                conn.execute("VACUUM")
+            except Exception:
+                pass
 
     def cleanup(self, retention_days):
         cutoff = time.time() - (retention_days * 86400)
@@ -900,32 +1093,35 @@ class Database:
         return dict(r) if r else None
 
     def create_macro(self, name, shortcut, actions):
-        conn = self._get_conn()
-        now = time.time()
-        cur = conn.execute(
-            "INSERT INTO macros (name,shortcut,actions,created_at,updated_at) VALUES (?,?,?,?,?)",
-            (name, shortcut, json.dumps(actions), now, now))
-        conn.commit()
-        return cur.lastrowid
+        with self._write_lock:
+            conn = self._get_conn()
+            now = time.time()
+            cur = conn.execute(
+                "INSERT INTO macros (name,shortcut,actions,created_at,updated_at) VALUES (?,?,?,?,?)",
+                (name, shortcut, json.dumps(actions), now, now))
+            conn.commit()
+            return cur.lastrowid
 
     def update_macro(self, macro_id, name=None, shortcut=None, actions=None):
-        conn = self._get_conn()
-        sets, params = [], []
-        if name is not None:
-            sets.append("name=?"); params.append(name)
-        if shortcut is not None:
-            sets.append("shortcut=?"); params.append(shortcut)
-        if actions is not None:
-            sets.append("actions=?"); params.append(json.dumps(actions))
-        sets.append("updated_at=?"); params.append(time.time())
-        params.append(macro_id)
-        conn.execute(f"UPDATE macros SET {','.join(sets)} WHERE id=?", params)
-        conn.commit()
+        with self._write_lock:
+            conn = self._get_conn()
+            sets, params = [], []
+            if name is not None:
+                sets.append("name=?"); params.append(name)
+            if shortcut is not None:
+                sets.append("shortcut=?"); params.append(shortcut)
+            if actions is not None:
+                sets.append("actions=?"); params.append(json.dumps(actions))
+            sets.append("updated_at=?"); params.append(time.time())
+            params.append(macro_id)
+            conn.execute(f"UPDATE macros SET {','.join(sets)} WHERE id=?", params)
+            conn.commit()
 
     def delete_macro(self, macro_id):
-        conn = self._get_conn()
-        conn.execute("DELETE FROM macros WHERE id=?", (macro_id,))
-        conn.commit()
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute("DELETE FROM macros WHERE id=?", (macro_id,))
+            conn.commit()
 
     # ── Import / Export ────────────────────────────────────────
 
@@ -942,32 +1138,33 @@ class Database:
         }
 
     def import_data(self, data, merge=True):
-        conn = self._get_conn()
-        imported = 0
-        events = data.get('events', [])
-        if events:
-            conn.executemany(
-                """INSERT INTO events
-                   (timestamp,event_type,key_name,character,modifiers,
-                    window_title,window_process,extra)
-                   VALUES (?,?,?,?,?,?,?,?)""",
-                [(e['timestamp'], e['event_type'], e.get('key_name'),
-                  e.get('character'), e.get('modifiers'),
-                  e.get('window_title'), e.get('window_process'),
-                  e.get('extra')) for e in events])
-            imported += len(events)
-        macros = data.get('macros', [])
-        for m in macros:
-            actions = m.get('actions', '[]')
-            if isinstance(actions, list):
-                actions = json.dumps(actions)
-            conn.execute(
-                "INSERT INTO macros (name,shortcut,actions,created_at,updated_at) VALUES (?,?,?,?,?)",
-                (m['name'], m.get('shortcut', ''), actions,
-                 m.get('created_at', time.time()), time.time()))
-            imported += 1
-        conn.commit()
-        return imported
+        with self._write_lock:
+            conn = self._get_conn()
+            imported = 0
+            events = data.get('events', [])
+            if events:
+                conn.executemany(
+                    """INSERT INTO events
+                       (timestamp,event_type,key_name,character,modifiers,
+                        window_title,window_process,extra)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    [(e['timestamp'], e['event_type'], clean_text(e.get('key_name')),
+                      clean_text(e.get('character')), clean_text(e.get('modifiers')),
+                      clean_text(e.get('window_title')), clean_text(e.get('window_process')),
+                      clean_text(e.get('extra'))) for e in events])
+                imported += len(events)
+            macros = data.get('macros', [])
+            for m in macros:
+                actions = m.get('actions', '[]')
+                if isinstance(actions, list):
+                    actions = json.dumps(actions)
+                conn.execute(
+                    "INSERT INTO macros (name,shortcut,actions,created_at,updated_at) VALUES (?,?,?,?,?)",
+                    (m['name'], m.get('shortcut', ''), actions,
+                     m.get('created_at', time.time()), time.time()))
+                imported += 1
+            conn.commit()
+            return imported
 
     # ── Clipboard CRUD ─────────────────────────────────────────
 
@@ -1037,59 +1234,63 @@ class Database:
         return rows, total
 
     def toggle_clipboard_pin(self, entry_id):
-        conn = self._get_conn()
-        conn.execute(
-            "UPDATE clipboard_entries SET pinned = CASE WHEN pinned=1 THEN 0 ELSE 1 END WHERE id=?",
-            (entry_id,))
-        conn.commit()
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute(
+                "UPDATE clipboard_entries SET pinned = CASE WHEN pinned=1 THEN 0 ELSE 1 END WHERE id=?",
+                (entry_id,))
+            conn.commit()
 
     def delete_clipboard_entry(self, entry_id):
-        conn = self._get_conn()
-        row = conn.execute(
-            "SELECT file_path, thumbnail_path FROM clipboard_entries WHERE id=?",
-            (entry_id,)).fetchone()
-        if row:
-            for p in (row['file_path'], row['thumbnail_path']):
-                if p and os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
-        conn.execute("DELETE FROM clipboard_entries WHERE id=?", (entry_id,))
-        conn.commit()
+        with self._write_lock:
+            conn = self._get_conn()
+            row = conn.execute(
+                "SELECT file_path, thumbnail_path FROM clipboard_entries WHERE id=?",
+                (entry_id,)).fetchone()
+            if row:
+                for p in (row['file_path'], row['thumbnail_path']):
+                    if p and os.path.exists(p):
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+            conn.execute("DELETE FROM clipboard_entries WHERE id=?", (entry_id,))
+            conn.commit()
 
     def clear_clipboard(self):
-        conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT file_path, thumbnail_path FROM clipboard_entries WHERE pinned=0"
-        ).fetchall()
-        for row in rows:
-            for p in (row['file_path'], row['thumbnail_path']):
-                if p and os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
-        conn.execute("DELETE FROM clipboard_entries WHERE pinned=0")
-        conn.commit()
+        with self._write_lock:
+            conn = self._get_conn()
+            rows = conn.execute(
+                "SELECT file_path, thumbnail_path FROM clipboard_entries WHERE pinned=0"
+            ).fetchall()
+            for row in rows:
+                for p in (row['file_path'], row['thumbnail_path']):
+                    if p and os.path.exists(p):
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+            conn.execute("DELETE FROM clipboard_entries WHERE pinned=0")
+            conn.commit()
 
     def cleanup_clipboard(self, retention_days):
         cutoff = time.time() - (retention_days * 86400)
-        conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT file_path, thumbnail_path FROM clipboard_entries "
-            "WHERE timestamp < ? AND pinned=0", (cutoff,)).fetchall()
-        for row in rows:
-            for p in (row['file_path'], row['thumbnail_path']):
-                if p and os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
-        conn.execute(
-            "DELETE FROM clipboard_entries WHERE timestamp < ? AND pinned=0",
-            (cutoff,))
-        conn.commit()
+        with self._write_lock:
+            conn = self._get_conn()
+            rows = conn.execute(
+                "SELECT file_path, thumbnail_path FROM clipboard_entries "
+                "WHERE timestamp < ? AND pinned=0", (cutoff,)).fetchall()
+            for row in rows:
+                for p in (row['file_path'], row['thumbnail_path']):
+                    if p and os.path.exists(p):
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+            conn.execute(
+                "DELETE FROM clipboard_entries WHERE timestamp < ? AND pinned=0",
+                (cutoff,))
+            conn.commit()
 
     def get_clipboard_stats(self):
         conn = self._get_conn()
@@ -1110,26 +1311,27 @@ class Database:
 
     def upsert_device(self, device_id, name, ip_address=None, port=None,
                       sync_enabled=1, clipboard_sync=0):
-        conn = self._get_conn()
-        existing = conn.execute(
-            "SELECT id FROM devices WHERE id=?", (device_id,)).fetchone()
-        now = time.time()
-        if existing:
-            conn.execute(
-                """UPDATE devices SET name=?, ip_address=?, port=?,
-                   last_seen=?, sync_enabled=?, clipboard_sync=?
-                   WHERE id=?""",
-                (name, ip_address, port, now, sync_enabled,
-                 clipboard_sync, device_id))
-        else:
-            conn.execute(
-                """INSERT INTO devices
-                   (id, name, ip_address, port, last_seen,
-                    sync_enabled, clipboard_sync, created_at)
-                   VALUES (?,?,?,?,?,?,?,?)""",
-                (device_id, name, ip_address, port, now,
-                 sync_enabled, clipboard_sync, now))
-        conn.commit()
+        with self._write_lock:
+            conn = self._get_conn()
+            existing = conn.execute(
+                "SELECT id FROM devices WHERE id=?", (device_id,)).fetchone()
+            now = time.time()
+            if existing:
+                conn.execute(
+                    """UPDATE devices SET name=?, ip_address=?, port=?,
+                       last_seen=?, sync_enabled=?, clipboard_sync=?
+                       WHERE id=?""",
+                    (name, ip_address, port, now, sync_enabled,
+                     clipboard_sync, device_id))
+            else:
+                conn.execute(
+                    """INSERT INTO devices
+                       (id, name, ip_address, port, last_seen,
+                        sync_enabled, clipboard_sync, created_at)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    (device_id, name, ip_address, port, now,
+                     sync_enabled, clipboard_sync, now))
+            conn.commit()
 
     def get_devices(self):
         conn = self._get_conn()
@@ -1137,22 +1339,24 @@ class Database:
                 conn.execute("SELECT * FROM devices ORDER BY name").fetchall()]
 
     def remove_device(self, device_id):
-        conn = self._get_conn()
-        conn.execute("DELETE FROM devices WHERE id=?", (device_id,))
-        conn.commit()
+        with self._write_lock:
+            conn = self._get_conn()
+            conn.execute("DELETE FROM devices WHERE id=?", (device_id,))
+            conn.commit()
 
     def update_device(self, device_id, **kwargs):
-        conn = self._get_conn()
-        sets, params = [], []
-        for k, v in kwargs.items():
-            if k in ('name', 'ip_address', 'port', 'sync_enabled',
-                     'clipboard_sync', 'last_seen'):
-                sets.append(f"{k}=?"); params.append(v)
-        if sets:
-            params.append(device_id)
-            conn.execute(
-                f"UPDATE devices SET {','.join(sets)} WHERE id=?", params)
-            conn.commit()
+        with self._write_lock:
+            conn = self._get_conn()
+            sets, params = [], []
+            for k, v in kwargs.items():
+                if k in ('name', 'ip_address', 'port', 'sync_enabled',
+                         'clipboard_sync', 'last_seen'):
+                    sets.append(f"{k}=?"); params.append(v)
+            if sets:
+                params.append(device_id)
+                conn.execute(
+                    f"UPDATE devices SET {','.join(sets)} WHERE id=?", params)
+                conn.commit()
 
     # ── Close ──────────────────────────────────────────────────
 

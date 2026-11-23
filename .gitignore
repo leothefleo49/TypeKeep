@@ -18,8 +18,14 @@ data/backups/
 # PyInstaller / build artifacts
 build/
 dist/
+dist-release/
 *.spec
 *.exe
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+installers/*.exe
 
 # IDE
 .vscode/

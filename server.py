@@ -11,11 +11,70 @@ import queue
 import threading
 from flask import Flask, jsonify, request, render_template, send_file, send_from_directory, Response
 
+import glob
+import io
+import json
+import os
+import socket
+import sys
+import time
+import uuid
+import logging
+import queue
+import threading
+from flask import Flask, jsonify, request, render_template, send_file, send_from_directory, Response
+
 from config import APP_VERSION
+from paths import BUNDLE_DIR, APP_DIR, DATA_DIR, BACKUP_DIR, CLIPS_DIR
 
 
-def create_app(database, recorder, config, cloud_sync=None):
-    app = Flask(__name__)
+def _get_lan_ips():
+    ips = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        primary = s.getsockname()[0]
+        s.close()
+        if primary and not primary.startswith('127.'):
+            ips.append(primary)
+    except Exception:
+        pass
+    try:
+        for res in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = res[4][0]
+            if ip and not ip.startswith('127.') and not ip.startswith('169.254.') and ip not in ips:
+                ips.append(ip)
+    except Exception:
+        pass
+    return ips or ['127.0.0.1']
+
+
+def _make_qr_svg(payload_text: str) -> str:
+    try:
+        import qrcode
+        import qrcode.image.svg
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=8,
+            border=2,
+        )
+        qr.add_data(payload_text)
+        qr.make(fit=True)
+        img = qr.make_image(image_factory=qrcode.image.svg.SvgPathImage)
+        buf = io.BytesIO()
+        img.save(buf)
+        return buf.getvalue().decode('utf-8', errors='replace')
+    except Exception:
+        return ''
+
+
+def create_app(database, recorder, config, cloud_sync=None, clipboard_monitor=None):
+    app = Flask(
+        __name__,
+        template_folder=os.path.join(BUNDLE_DIR, 'templates'),
+        static_folder=os.path.join(BUNDLE_DIR, 'static'),
+    )
     app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
     log = logging.getLogger('werkzeug')
@@ -51,28 +110,43 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     @app.before_request
     def _same_origin_guard():
-        """Block cross-origin requests (webpages on other sites, CSRF,
-        DNS rebinding). The dashboard is served same-origin, so it is
-        unaffected; browsers enforce that only our own pages can talk
-        to this API."""
+        """Block cross-origin requests from external sites while permitting
+        same-origin dashboard/mobile PWA calls and authenticated mobile companion apps."""
         origin = request.headers.get('Origin', '')
-        if origin:
-            host = request.headers.get('Host', '')
-            try:
-                from urllib.parse import urlparse
-                o = urlparse(origin)
-                ohost = o.hostname or ''
-                hhost = host.split(':')[0] if host else ''
-                if ohost != hhost:
-                    return jsonify({'error': 'cross-origin request blocked'}), 403
-            except Exception:
-                return jsonify({'error': 'bad origin'}), 403
-        return None
+        if not origin:
+            return None
+        host = request.headers.get('Host', '')
+        try:
+            from urllib.parse import urlparse
+            o = urlparse(origin)
+            ohost = o.hostname or ''
+            hhost = host.split(':')[0] if host else ''
+            if ohost == hhost:
+                return None
+            # Allow TypeKeep Android/iOS Companion app (Capacitor/Cordova/WebView)
+            # only when LAN access is enabled AND valid sync key is presented.
+            native_app_origins = {'http://localhost', 'https://localhost', 'capacitor://localhost', 'ionic://localhost'}
+            if config.get('server_lan_access', False) and origin.rstrip('/') in native_app_origins:
+                req_key = request.headers.get('X-TypeKeep-Key', '') or request.args.get('key', '')
+                valid_keys = {k for k in (config.get('sync_key', ''), config.get('cloud_sync_key', '')) if k}
+                if req_key and valid_keys and req_key in valid_keys:
+                    return None
+                if request.method == 'OPTIONS':
+                    return ('', 204)
+            return jsonify({'error': 'cross-origin request blocked'}), 403
+        except Exception:
+            return jsonify({'error': 'bad origin'}), 403
 
     @app.after_request
     def _security_headers(response):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
+        origin = request.headers.get('Origin', '')
+        native_app_origins = {'http://localhost', 'https://localhost', 'capacitor://localhost', 'ionic://localhost'}
+        if origin and config.get('server_lan_access', False) and origin.rstrip('/') in native_app_origins:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-TypeKeep-Key'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
         return response
 
     @app.errorhandler(Exception)
@@ -82,8 +156,17 @@ def create_app(database, recorder, config, cloud_sync=None):
     # ── Helpers ────────────────────────────────────────────────
 
     def _time_range():
+        start_arg = request.args.get('start', type=float)
+        end_arg = request.args.get('end', type=float)
+        if start_arg is not None or end_arg is not None:
+            return start_arg, end_arg
         tr = request.args.get('range', '24h')
         now = time.time()
+        if tr == 'today':
+            import datetime
+            midnight = datetime.datetime.now().replace(
+                hour=0, minute=0, second=0, microsecond=0).timestamp()
+            return midnight, now
         m = {'1h': 3600, '3h': 10800, '6h': 21600, '12h': 43200,
              '24h': 86400, '3d': 259200, '7d': 604800, '30d': 2592000,
              'all': None}
@@ -231,7 +314,9 @@ def create_app(database, recorder, config, cloud_sync=None):
             'cloud_sync_enabled', 'supabase_url', 'supabase_anon_key',
             'cloud_sync_key', 'cloud_sync_clipboard', 'cloud_sync_messages',
             'cloud_sync_interval_seconds',
+            'server_lan_access', 'auto_copy_remote_clipboard',
         }
+        prev_lan = bool(config.get('server_lan_access', False))
         filtered = {k: v for k, v in data.items() if k in safe_keys}
         config.update(filtered)
 
@@ -246,7 +331,13 @@ def create_app(database, recorder, config, cloud_sync=None):
                 'supabase_anon_key', 'cloud_sync_key')):
             cloud_sync.restart()
 
-        return jsonify({'status': 'ok', 'settings': config.to_dict()})
+        restart_needed = ('server_lan_access' in filtered
+                          and bool(filtered['server_lan_access']) != prev_lan)
+        return jsonify({
+            'status': 'ok',
+            'restart_required': restart_needed,
+            'settings': config.to_dict(),
+        })
 
     # ── Delete ─────────────────────────────────────────────────
 
@@ -322,6 +413,8 @@ def create_app(database, recorder, config, cloud_sync=None):
         shortcut = data.get('shortcut', '')
         actions = data.get('actions', [])
         mid = database.create_macro(name, shortcut, actions)
+        if hasattr(recorder, 'reload_macros'):
+            recorder.reload_macros()
         return jsonify({'id': mid, 'status': 'ok'})
 
     @app.route('/api/macros/<int:mid>', methods=['PUT'])
@@ -329,11 +422,15 @@ def create_app(database, recorder, config, cloud_sync=None):
         data = request.get_json(silent=True) or {}
         database.update_macro(mid, data.get('name'), data.get('shortcut'),
                               data.get('actions'))
+        if hasattr(recorder, 'reload_macros'):
+            recorder.reload_macros()
         return jsonify({'status': 'ok'})
 
     @app.route('/api/macros/<int:mid>', methods=['DELETE'])
     def api_macros_delete(mid):
         database.delete_macro(mid)
+        if hasattr(recorder, 'reload_macros'):
+            recorder.reload_macros()
         return jsonify({'status': 'ok'})
 
     @app.route('/api/macros/<int:mid>/run', methods=['POST'])
@@ -404,11 +501,75 @@ def create_app(database, recorder, config, cloud_sync=None):
         database.clear_clipboard()
         return jsonify({'status': 'ok'})
 
+    @app.route('/api/clipboard/add', methods=['POST'])
+    def api_clipboard_add():
+        data = request.get_json(silent=True) or {}
+        text = (data.get('content_text') or data.get('text') or '').strip()
+        if not text:
+            return jsonify({'error': 'content_text required'}), 400
+        eid = database.add_clipboard_entry(
+            content_type=data.get('content_type', 'text'),
+            content_text=text[:50000],
+            source_app=data.get('source_app', 'Remote'),
+            source_title=data.get('source_title', ''),
+            device_id=data.get('device_id'),
+        )
+        copied = False
+        if data.get('copy_to_os', True) and clipboard_monitor:
+            copied = clipboard_monitor.set_text(text)
+        if cloud_sync and cloud_sync.enabled and data.get('push_cloud', True):
+            cloud_sync.push_clipboard_entry('text', text, data.get('source_app', 'TypeKeep'))
+        _broadcast_sse('clipboard_copied', {'type': 'text', 'preview': text[:100], 'ts': time.time()})
+        return jsonify({'status': 'ok', 'id': eid, 'copied_to_os': copied})
+
+    @app.route('/api/clipboard/<int:eid>/copy-to-os', methods=['POST'])
+    def api_clipboard_copy_to_os(eid):
+        conn = database._get_conn()
+        row = conn.execute(
+            "SELECT content_type, content_text FROM clipboard_entries WHERE id=?",
+            (eid,),
+        ).fetchone()
+        if not row or not row['content_text']:
+            return jsonify({'error': 'Text entry not found'}), 404
+        if not clipboard_monitor:
+            return jsonify({'error': 'Clipboard monitor unavailable'}), 503
+        ok = clipboard_monitor.set_text(row['content_text'])
+        return jsonify({'status': 'ok' if ok else 'error', 'copied': ok})
+
+    @app.route('/api/notes/quick', methods=['POST'])
+    def api_notes_quick():
+        data = request.get_json(silent=True) or {}
+        text = (data.get('text') or '').strip()
+        if not text:
+            return jsonify({'error': 'text required'}), 400
+        device_name = data.get('device_name') or config.get('device_name', 'Device')
+        device_id = data.get('device_id') or config.get('device_id', '')
+        app_name = data.get('app') or 'Quick Note'
+        nid = database.add_remote_message(
+            final_text=text,
+            device_id=device_id,
+            device_name=device_name,
+            app=app_name,
+            win_title=data.get('title') or f'Note from {device_name}',
+        )
+        copied = False
+        if data.get('copy_to_clipboard') and clipboard_monitor:
+            database.add_clipboard_entry(
+                content_type='text',
+                content_text=text,
+                source_app=app_name,
+                source_title=f'[{device_name}]',
+                device_id=device_id,
+            )
+            copied = clipboard_monitor.set_text(text)
+        if cloud_sync and cloud_sync.enabled:
+            cloud_sync.push_quick_note(text, source_app=app_name, win_title=f'Note from {device_name}')
+        _broadcast_sse('update', {'ts': time.time()})
+        return jsonify({'status': 'ok', 'id': nid, 'copied_to_clipboard': copied})
+
     @app.route('/api/clips/<path:filename>')
     def api_serve_clip(filename):
-        clips_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), 'data', 'clips')
-        return send_from_directory(clips_dir, filename)
+        return send_from_directory(CLIPS_DIR, filename)
 
     # ── Backup & Restore ───────────────────────────────────────
 
@@ -419,9 +580,7 @@ def create_app(database, recorder, config, cloud_sync=None):
 
     @app.route('/api/backups')
     def api_backups():
-        import glob
-        backup_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'backups')
-        files = sorted(glob.glob(os.path.join(backup_dir, 'typekeep_*.db')), reverse=True)
+        files = sorted(glob.glob(os.path.join(BACKUP_DIR, 'typekeep_*.db')), reverse=True)
         backups = []
         for f in files:
             backups.append({
@@ -442,6 +601,36 @@ def create_app(database, recorder, config, cloud_sync=None):
             'sync_enabled': config.get('sync_enabled', False),
             'clipboard_sync': config.get('clipboard_sync', False),
             'port': config.get('server_port', 7700),
+            'lan_access': config.get('server_lan_access', False),
+            'lan_ips': _get_lan_ips(),
+            'cloud_sync_enabled': config.get('cloud_sync_enabled', False),
+            'cloud_sync_key': config.get('cloud_sync_key', ''),
+        })
+
+    @app.route('/api/sync/qr')
+    def api_sync_qr():
+        ips = _get_lan_ips()
+        primary_ip = ips[0] if ips else '127.0.0.1'
+        port_num = config.get('server_port', 7700)
+        lan_url = f"http://{primary_ip}:{port_num}/mobile"
+        cloud_key = config.get('cloud_sync_key', '') or config.get('sync_key', '')
+        from urllib.parse import urlencode
+        params = {}
+        if cloud_key:
+            params['key'] = cloud_key
+        if config.get('server_lan_access', False):
+            params['lan'] = f"http://{primary_ip}:{port_num}"
+        pair_url = f"{lan_url}?{urlencode(params)}" if params else lan_url
+        svg = _make_qr_svg(pair_url)
+        return jsonify({
+            'pair_url': pair_url,
+            'lan_url': lan_url,
+            'lan_ips': ips,
+            'port': port_num,
+            'lan_access': bool(config.get('server_lan_access', False)),
+            'sync_key': cloud_key,
+            'device_name': config.get('device_name'),
+            'qr_svg': svg,
         })
 
     @app.route('/api/sync/info', methods=['POST'])
@@ -708,21 +897,18 @@ def create_app(database, recorder, config, cloud_sync=None):
     @app.route('/mobile')
     @app.route('/mobile/')
     def serve_mobile():
-        mobile_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), 'mobile')
+        mobile_dir = os.path.join(BUNDLE_DIR, 'mobile')
         return send_from_directory(mobile_dir, 'index.html')
 
     @app.route('/mobile/<path:filename>')
     def serve_mobile_files(filename):
-        mobile_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), 'mobile')
+        mobile_dir = os.path.join(BUNDLE_DIR, 'mobile')
         return send_from_directory(mobile_dir, filename)
 
     # ── Startup helper (Windows registry) ──────────────────────
 
     def _set_startup(enabled, bg_mode=True, ui_on_boot=False):
         try:
-            import sys
             import winreg
             key = winreg.OpenKey(
                 winreg.HKEY_CURRENT_USER,
@@ -733,10 +919,11 @@ def create_app(database, recorder, config, cloud_sync=None):
                 if getattr(sys, 'frozen', False):
                     base_cmd = f'"{exe}"'
                 else:
-                    script = os.path.abspath(os.path.join(
-                        os.path.dirname(__file__), 'typekeep.py'))
+                    script = os.path.abspath(os.path.join(APP_DIR, 'typekeep.py'))
                     if exe.lower().endswith('python.exe'):
-                        exe = exe.replace('python.exe', 'pythonw.exe')
+                        pyw = exe[:-10] + 'pythonw.exe'
+                        if os.path.exists(pyw):
+                            exe = pyw
                     base_cmd = f'"{exe}" "{script}"'
                 if bg_mode and not ui_on_boot:
                     winreg.SetValueEx(key, 'TypeKeep', 0, winreg.REG_SZ,

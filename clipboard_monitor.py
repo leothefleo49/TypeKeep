@@ -13,6 +13,8 @@ import platform
 import threading
 import time
 
+from paths import CLIPS_DIR
+
 _IS_WINDOWS = platform.system() == 'Windows'
 
 CF_TEXT = 1
@@ -20,10 +22,11 @@ CF_BITMAP = 2
 CF_UNICODETEXT = 13
 CF_HDROP = 15
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CLIPS_DIR = os.path.join(BASE_DIR, 'data', 'clips')
-
 if _IS_WINDOWS:
+    class _LASTINPUTINFO(ctypes.Structure):
+        _fields_ = [('cbSize', ctypes.wintypes.UINT),
+                    ('dwTime', ctypes.wintypes.DWORD)]
+
     _user32 = ctypes.windll.user32
     _kernel32 = ctypes.windll.kernel32
     _shell32 = ctypes.windll.shell32
@@ -32,25 +35,51 @@ if _IS_WINDOWS:
     _user32.OpenClipboard.restype = ctypes.wintypes.BOOL
     _user32.CloseClipboard.argtypes = []
     _user32.CloseClipboard.restype = ctypes.wintypes.BOOL
+    _user32.EmptyClipboard.argtypes = []
+    _user32.EmptyClipboard.restype = ctypes.wintypes.BOOL
+    _user32.SetClipboardData.argtypes = [ctypes.wintypes.UINT, ctypes.c_void_p]
+    _user32.SetClipboardData.restype = ctypes.c_void_p
     _user32.GetClipboardData.argtypes = [ctypes.wintypes.UINT]
     _user32.GetClipboardData.restype = ctypes.c_void_p
     _user32.IsClipboardFormatAvailable.argtypes = [ctypes.wintypes.UINT]
     _user32.IsClipboardFormatAvailable.restype = ctypes.wintypes.BOOL
     _user32.GetClipboardSequenceNumber.argtypes = []
     _user32.GetClipboardSequenceNumber.restype = ctypes.wintypes.DWORD
+    _user32.GetLastInputInfo.argtypes = [ctypes.POINTER(_LASTINPUTINFO)]
+    _user32.GetLastInputInfo.restype = ctypes.wintypes.BOOL
 
+    _kernel32.GlobalAlloc.argtypes = [ctypes.wintypes.UINT, ctypes.c_size_t]
+    _kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    _kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    _kernel32.GlobalFree.restype = ctypes.c_void_p
     _kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
     _kernel32.GlobalLock.restype = ctypes.c_void_p
     _kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
     _kernel32.GlobalUnlock.restype = ctypes.wintypes.BOOL
     _kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
     _kernel32.GlobalSize.restype = ctypes.c_size_t
+    _kernel32.GetTickCount.argtypes = []
+    _kernel32.GetTickCount.restype = ctypes.wintypes.DWORD
 
     _shell32.DragQueryFileW.argtypes = [
         ctypes.c_void_p, ctypes.wintypes.UINT,
         ctypes.c_wchar_p, ctypes.wintypes.UINT,
     ]
     _shell32.DragQueryFileW.restype = ctypes.wintypes.UINT
+
+    def _idle_seconds() -> float:
+        try:
+            lii = _LASTINPUTINFO()
+            lii.cbSize = ctypes.sizeof(_LASTINPUTINFO)
+            if _user32.GetLastInputInfo(ctypes.byref(lii)):
+                tick = _kernel32.GetTickCount()
+                return max(0.0, ((tick - lii.dwTime) & 0xFFFFFFFF) / 1000.0)
+        except Exception:
+            pass
+        return 0.0
+else:
+    def _idle_seconds() -> float:
+        return 0.0
 
 
 def _active_window_info():
@@ -68,14 +97,54 @@ class ClipboardMonitor:
         self.db = db
         self.config = config
         self._running = False
+        self._stop_evt = threading.Event()
         self._thread = None
         self._last_seq = 0
         self._last_hash = ''
         self._broadcast_fn = None
+        self._clip_lock = threading.Lock()
         os.makedirs(CLIPS_DIR, exist_ok=True)
 
     def set_broadcast_fn(self, fn):
         self._broadcast_fn = fn
+
+    def set_text(self, text: str) -> bool:
+        """Write text to the OS clipboard without creating a duplicate local entry."""
+        if not _IS_WINDOWS or not isinstance(text, str):
+            return False
+        with self._clip_lock:
+            try:
+                self._last_hash = hashlib.md5(text.encode('utf-8', errors='replace')).hexdigest()
+                data = (text + '\x00').encode('utf-16-le')
+                # GMEM_MOVEABLE = 0x0002
+                h_mem = _kernel32.GlobalAlloc(0x0002, len(data))
+                if not h_mem:
+                    return False
+                ptr = _kernel32.GlobalLock(h_mem)
+                if not ptr:
+                    _kernel32.GlobalFree(h_mem)
+                    return False
+                try:
+                    ctypes.memmove(ptr, data, len(data))
+                finally:
+                    _kernel32.GlobalUnlock(h_mem)
+                for _ in range(5):
+                    if _user32.OpenClipboard(0):
+                        try:
+                            _user32.EmptyClipboard()
+                            if _user32.SetClipboardData(CF_UNICODETEXT, h_mem):
+                                h_mem = None
+                                self._last_seq = _user32.GetClipboardSequenceNumber()
+                                return True
+                        finally:
+                            _user32.CloseClipboard()
+                        break
+                    time.sleep(0.05)
+                if h_mem:
+                    _kernel32.GlobalFree(h_mem)
+                return False
+            except Exception:
+                return False
 
     def _notify_copied(self, content_type, preview=''):
         if self._broadcast_fn:
@@ -91,8 +160,7 @@ class ClipboardMonitor:
     def start(self):
         if not _IS_WINDOWS:
             return
-        if not self.config.get('record_clipboard', True):
-            return
+        self._stop_evt.clear()
         self._running = True
         try:
             self._last_seq = _user32.GetClipboardSequenceNumber()
@@ -104,21 +172,25 @@ class ClipboardMonitor:
 
     def stop(self):
         self._running = False
+        self._stop_evt.set()
 
     def _poll_loop(self):
-        while self._running:
-            poll_seconds = max(0.5, float(self.config.get('clipboard_poll_seconds', 1.25) or 1.25))
+        while self._running and not self._stop_evt.is_set():
+            base_poll = max(0.5, float(self.config.get('clipboard_poll_seconds', 1.25) or 1.25))
             try:
                 if not self.config.get('record_clipboard', True):
-                    time.sleep(2)
+                    self._stop_evt.wait(3.0)
                     continue
-                seq = _user32.GetClipboardSequenceNumber()
-                if seq != self._last_seq and self._last_seq != 0:
-                    self._read_clipboard()
-                self._last_seq = seq
+                with self._clip_lock:
+                    seq = _user32.GetClipboardSequenceNumber()
+                    if seq != self._last_seq and self._last_seq != 0:
+                        self._read_clipboard()
+                    self._last_seq = seq
             except Exception:
                 pass
-            time.sleep(poll_seconds)
+            idle_sec = _idle_seconds()
+            sleep_for = max(base_poll, 3.5) if idle_sec > 45.0 else base_poll
+            self._stop_evt.wait(sleep_for)
 
     def _read_clipboard(self):
         try:

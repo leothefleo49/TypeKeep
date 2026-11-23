@@ -606,3 +606,43 @@ html, body {
   color: var(--text-dim);
   padding: 8px;
 }
+
+.lan-banner {
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.mode-pill {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  border: 1px solid rgba(45, 212, 191, 0.35);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.search-bar-row {
+  margin-bottom: 10px;
+}
+
+.mobile-search {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  padding: 8px 12px;
+}
+
+.mobile-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+

@@ -29,15 +29,29 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import Config, APP_VERSION
 from database import Database
+from paths import APP_DIR, DATA_DIR, LOG_FILE
 from recorder import Recorder
 from server import create_app
 from tray import TrayIcon
 from clipboard_monitor import ClipboardMonitor
 from cloud_sync import CloudSync
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, 'data')
-LOG_FILE = os.path.join(DATA_DIR, 'typekeep.log')
+BASE_DIR = APP_DIR
+
+
+def _enable_efficiency_mode():
+    """Lower background process priority on Windows so TypeKeep runs quietly."""
+    if platform.system() != 'Windows':
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+        PROCESS_MODE_BACKGROUND_BEGIN = 0x00100000  # unused, too strict for UI
+        handle = kernel32.GetCurrentProcess()
+        kernel32.SetPriorityClass(handle, BELOW_NORMAL_PRIORITY_CLASS)
+    except Exception:
+        pass
 
 
 def _port_in_use(port: int) -> bool:
@@ -51,8 +65,10 @@ def _runtime_command(background=True):
     else:
         exe = sys.executable
         if platform.system() == 'Windows' and exe.lower().endswith('python.exe'):
-            exe = exe[:-10] + 'pythonw.exe'
-        cmd = [exe, os.path.join(BASE_DIR, 'typekeep.py')]
+            pyw = exe[:-10] + 'pythonw.exe'
+            if os.path.exists(pyw):
+                exe = pyw
+        cmd = [exe, os.path.join(APP_DIR, 'typekeep.py')]
     if background:
         cmd.append('--background')
     return cmd
@@ -187,6 +203,7 @@ def main():
         return
 
     _configure_background_logging(background_mode)
+    _enable_efficiency_mode()
 
     if _port_in_use(port):
         if not background_mode:
@@ -207,8 +224,8 @@ def main():
 
     recorder = Recorder(db, config)
     clipboard = ClipboardMonitor(db, config)
-    cloud = CloudSync(db, config)
-    app = create_app(db, recorder, config, cloud)
+    cloud = CloudSync(db, config, clipboard_monitor=clipboard)
+    app = create_app(db, recorder, config, cloud, clipboard_monitor=clipboard)
 
     clipboard.set_broadcast_fn(app.broadcast_sse)
 
@@ -224,16 +241,22 @@ def main():
     clipboard.start()
     cloud.start()
 
+    stop_periodic = threading.Event()
+
     def _periodic():
-        flush_sec = max(0.5, float(config.get('buffer_flush_seconds', 2) or 2))
         cleanup_interval = config.get('cleanup_interval_seconds', 3600)
         last_cleanup = time.time()
         last_broadcast = time.time()
-        while True:
+        last_flush = time.time()
+        while not stop_periodic.is_set():
             try:
-                db.flush_buffer()
                 now = time.time()
-                if app.sse_client_count() and now - last_broadcast >= 2:
+                clients = app.sse_client_count()
+                if clients and now - last_flush >= 2:
+                    if db.buffer_size() > 0:
+                        db.flush_buffer()
+                    last_flush = now
+                if clients and now - last_broadcast >= 2:
                     try:
                         app.broadcast_sse('update', {'ts': now})
                     except Exception:
@@ -248,7 +271,8 @@ def main():
                     db.maybe_backup()
             except Exception as exc:
                 print(f"[TypeKeep] periodic error: {exc}")
-            time.sleep(max(0.5, float(config.get('buffer_flush_seconds', flush_sec) or flush_sec)))
+            # Sleep longer when no dashboard tab is open to eliminate idle wakeups
+            stop_periodic.wait(2.0 if app.sse_client_count() > 0 else 15.0)
 
     threading.Thread(target=_periodic, daemon=True, name='flush').start()
 
@@ -282,6 +306,7 @@ def main():
             pass
 
     print("\n[TypeKeep] Shutting down...")
+    stop_periodic.set()
     recorder.stop()
     clipboard.stop()
     cloud.stop()

@@ -1,6 +1,6 @@
 {
   "name": "typekeep-companion",
-  "version": "3.2.0",
+  "version": "3.4.0",
   "description": "TypeKeep Companion — Cross-device clipboard sync & typing history viewer",
   "author": {
     "name": "leothefleo49",
@@ -33,15 +33,23 @@
       "icon.*"
     ],
     "win": {
-      "target": ["nsis", "portable"],
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "icon": "icon.png"
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "icon": "icon.png"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "icon": "icon.png"
     },
     "nsis": {

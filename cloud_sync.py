@@ -1,7 +1,10 @@
 """TypeKeep Cloud Sync — Supabase-powered cross-device synchronization.
 
-Free tier: 500MB storage, 2GB bandwidth, unlimited API requests.
-Users create their own Supabase project and enter URL + anon key.
+Overhauled v3.4.0:
+- Persists push/pull checkpoints in app_meta so restarts never echo duplicates.
+- True bidirectional clipboard + message/notes sync (_pull_messages + _pull_clipboard).
+- Optional auto_copy_remote_clipboard pushes newly synced remote text straight
+  into the Windows OS clipboard.
 """
 
 import json
@@ -18,17 +21,48 @@ except ImportError:
 _SYNC_INTERVAL = 30  # seconds between sync cycles
 
 
+def _parse_iso_ts(val) -> float:
+    if not val:
+        return 0.0
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        pass
+    try:
+        import datetime as _dt
+        s = str(val).replace('Z', '+00:00')
+        return _dt.datetime.fromisoformat(s).timestamp()
+    except Exception:
+        return time.time()
+
+
 class CloudSync:
     """Handles bidirectional sync with Supabase."""
 
-    def __init__(self, database, config):
+    def __init__(self, database, config, clipboard_monitor=None):
         self.db = database
         self.config = config
+        self.clipboard_monitor = clipboard_monitor
         self._running = False
+        self._stop_evt = threading.Event()
         self._thread = None
-        self._last_push_ts = 0
-        self._last_pull_ts = 0
-        self._last_message_push_ts = 0
+        self._last_push_ts = self._load_ts('cloud_last_push_ts')
+        self._last_pull_ts = self._load_ts('cloud_last_pull_ts')
+        self._last_message_push_ts = self._load_ts('cloud_last_msg_push_ts')
+        self._last_message_pull_ts = self._load_ts('cloud_last_msg_pull_ts')
+
+    def _load_ts(self, key: str) -> float:
+        try:
+            v = self.db.get_meta(key)
+            return float(v) if v else 0.0
+        except Exception:
+            return 0.0
+
+    def _save_ts(self, key: str, val: float) -> None:
+        try:
+            self.db.set_meta(key, f"{val:.3f}")
+        except Exception:
+            pass
 
     # ── Configuration ──────────────────────────────────────────
 
@@ -94,6 +128,7 @@ class CloudSync:
         if self._thread and self._thread.is_alive():
             self._running = True
             return
+        self._stop_evt.clear()
         self._running = True
         self._register_device()
         self._thread = threading.Thread(
@@ -103,6 +138,7 @@ class CloudSync:
 
     def stop(self):
         self._running = False
+        self._stop_evt.set()
 
     def restart(self):
         self.stop()
@@ -114,15 +150,13 @@ class CloudSync:
 
     def _register_device(self):
         try:
-            # Upsert sync group
             self._api('POST', 'sync_groups', data={
                 'sync_key': self.sync_key,
             }, params={'on_conflict': 'sync_key'}, upsert=True)
         except Exception:
-            pass  # Group may already exist
+            pass
 
         try:
-            # Upsert this device
             self._api('POST', 'sync_devices',
                       params={'on_conflict': 'id'},
                       upsert=True,
@@ -140,37 +174,42 @@ class CloudSync:
     # ── Main sync loop ─────────────────────────────────────────
 
     def _sync_loop(self):
-        while self._running:
+        while self._running and not self._stop_evt.is_set():
             if not self.enabled:
-                time.sleep(5)
+                self._stop_evt.wait(5)
                 continue
             try:
                 self._push_clipboard()
                 self._pull_clipboard()
                 self._push_messages()
+                self._pull_messages()
                 self._update_heartbeat()
             except Exception as e:
                 print(f'[TypeKeep] Cloud sync error: {e}')
                 traceback.print_exc()
             interval = max(10, int(self.config.get(
                 'cloud_sync_interval_seconds', _SYNC_INTERVAL) or _SYNC_INTERVAL))
-            time.sleep(interval)
+            self._stop_evt.wait(interval)
 
     # ── Push clipboard to cloud ────────────────────────────────
 
     def _push_clipboard(self):
         if not self.config.get('cloud_sync_clipboard', True):
             return
-        entries, _ = self.db.get_clipboard(
-            start_time=self._last_push_ts or (time.time() - 300),
-            limit=50)
+        since = self._last_push_ts or (time.time() - 300)
+        entries, _ = self.db.get_clipboard(start_time=since, limit=50)
         if not entries:
             return
         batch = []
+        max_ts = self._last_push_ts
         for e in entries:
-            # Skip entries that came from cloud (avoid echo)
             if e.get('device_id') and e['device_id'] != self.device_id:
                 continue
+            ts_val = float(e.get('timestamp') or 0)
+            if ts_val <= self._last_push_ts:
+                continue
+            if ts_val > max_ts:
+                max_ts = ts_val
             batch.append({
                 'sync_key': self.sync_key,
                 'device_id': self.device_id,
@@ -180,22 +219,26 @@ class CloudSync:
                 'source_app': e.get('source_app', ''),
                 'timestamp': time.strftime(
                     '%Y-%m-%dT%H:%M:%SZ',
-                    time.gmtime(e['timestamp'])),
+                    time.gmtime(ts_val)),
                 'extra': json.dumps({'local_id': e['id']}),
             })
         if batch:
             try:
                 self._api('POST', 'sync_clipboard', data=batch)
+                self._last_push_ts = max(max_ts, time.time())
+                self._save_ts('cloud_last_push_ts', self._last_push_ts)
             except Exception as e:
                 print(f'[TypeKeep] Cloud push clipboard error: {e}')
-        self._last_push_ts = time.time()
+        else:
+            self._last_push_ts = time.time()
+            self._save_ts('cloud_last_push_ts', self._last_push_ts)
 
     # ── Pull clipboard from cloud ──────────────────────────────
 
     def _pull_clipboard(self):
         if not self.config.get('cloud_sync_clipboard', True):
             return
-        since = self._last_pull_ts or (time.time() - 300)
+        since = self._last_pull_ts or (time.time() - 3600)
         since_str = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(since))
         try:
             entries = self._api('GET', 'sync_clipboard', params={
@@ -208,9 +251,13 @@ class CloudSync:
         except Exception as e:
             print(f'[TypeKeep] Cloud pull clipboard error: {e}')
             return
+        now = time.time()
         if not entries:
-            self._last_pull_ts = time.time()
+            self._last_pull_ts = now
+            self._save_ts('cloud_last_pull_ts', now)
             return
+
+        newest_remote_text = None
         for e in entries:
             if self.db.clipboard_entry_exists(
                     e['content_type'],
@@ -226,24 +273,37 @@ class CloudSync:
                 source_title=f"[{e.get('device_name', 'Remote')}]",
                 device_id=e.get('device_id'),
             )
-        self._last_pull_ts = time.time()
+            if newest_remote_text is None and e.get('content_type') == 'text' and e.get('content_text'):
+                newest_remote_text = e.get('content_text')
+
+        if newest_remote_text and self.clipboard_monitor and self.config.get('auto_copy_remote_clipboard', False):
+            self.clipboard_monitor.set_text(newest_remote_text)
+
+        self._last_pull_ts = now
+        self._save_ts('cloud_last_pull_ts', now)
 
     # ── Push message summaries ─────────────────────────────────
 
     def _push_messages(self):
-        """Push recent message summaries to cloud for mobile viewing."""
+        """Push recent local message summaries to cloud for mobile viewing."""
         if not self.config.get('cloud_sync_messages', True):
             return
-        self.db.flush_buffer()
+        if self.db.buffer_size() > 0:
+            self.db.flush_buffer()
         now = time.time()
+        since = self._last_message_push_ts or (now - 300)
         messages, _ = self.db.get_messages(
-            start_time=self._last_message_push_ts or (now - 300),
-            limit=20,
+            start_time=since,
+            limit=25,
             sort='newest')
         if not messages:
+            self._last_message_push_ts = now
+            self._save_ts('cloud_last_msg_push_ts', now)
             return
         batch = []
         for m in messages:
+            if m.get('remote'):
+                continue
             batch.append({
                 'sync_key': self.sync_key,
                 'device_id': self.device_id,
@@ -263,6 +323,54 @@ class CloudSync:
             except Exception as e:
                 print(f'[TypeKeep] Cloud push messages error: {e}')
         self._last_message_push_ts = now
+        self._save_ts('cloud_last_msg_push_ts', now)
+
+    # ── Pull remote messages / notes ───────────────────────────
+
+    def _pull_messages(self):
+        """Pull notes and typing summaries composed on mobile/other PCs."""
+        if not self.config.get('cloud_sync_messages', True):
+            return
+        since = self._last_message_pull_ts or (time.time() - 86400)
+        since_str = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(since))
+        try:
+            msgs = self._api('GET', 'sync_messages', params={
+                'sync_key': f'eq.{self.sync_key}',
+                'device_id': f'neq.{self.device_id}',
+                'synced_at': f'gt.{since_str}',
+                'order': 'synced_at.desc',
+                'limit': '30',
+            })
+        except Exception as e:
+            print(f'[TypeKeep] Cloud pull messages error: {e}')
+            return
+        now = time.time()
+        if not msgs:
+            self._last_message_pull_ts = now
+            self._save_ts('cloud_last_msg_pull_ts', now)
+            return
+
+        for m in msgs:
+            txt = (m.get('final_text') or '').strip()
+            if not txt:
+                continue
+            st = float(m.get('start_time') or _parse_iso_ts(m.get('synced_at')) or now)
+            et = float(m.get('end_time') or st)
+            did = m.get('device_id') or ''
+            if self.db.remote_message_exists(txt, device_id=did, start_time=st):
+                continue
+            self.db.add_remote_message(
+                final_text=txt,
+                device_id=did,
+                device_name=m.get('device_name') or 'Remote',
+                app=m.get('app') or 'TypeKeep Mobile',
+                win_title=m.get('win_title') or '',
+                start_time=st,
+                end_time=et,
+                keystroke_count=m.get('keystroke_count') or len(txt),
+            )
+        self._last_message_pull_ts = now
+        self._save_ts('cloud_last_msg_pull_ts', now)
 
     # ── Heartbeat ──────────────────────────────────────────────
 
@@ -339,6 +447,28 @@ class CloudSync:
         except Exception:
             return False
 
+    def push_quick_note(self, final_text, source_app='Quick Note', win_title='TypeKeep'):
+        """Push a single quick note to cloud sync_messages."""
+        if not self.enabled or not self.config.get('cloud_sync_messages', True):
+            return False
+        now = time.time()
+        try:
+            self._api('POST', 'sync_messages', data={
+                'sync_key': self.sync_key,
+                'device_id': self.device_id,
+                'device_name': self.device_name,
+                'final_text': (final_text or '')[:5000],
+                'app': source_app,
+                'win_title': win_title[:200],
+                'start_time': now,
+                'end_time': now,
+                'keystroke_count': len(final_text or ''),
+                'synced_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            })
+            return True
+        except Exception:
+            return False
+
     def test_connection(self):
         """Test Supabase connectivity."""
         if not self.sync_key:
@@ -348,7 +478,7 @@ class CloudSync:
             return {'status': 'error', 'connected': False,
                     'error': 'Supabase URL and anon key are required.'}
         try:
-            result = self._api('GET', 'sync_groups', params={
+            self._api('GET', 'sync_groups', params={
                 'sync_key': f'eq.{self.sync_key}',
                 'limit': '1',
             })

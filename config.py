@@ -7,12 +7,13 @@ import shutil
 import threading
 import time
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, 'data')
+from paths import APP_DIR, DATA_DIR
+
+BASE_DIR = APP_DIR
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 CONFIG_BACKUP = os.path.join(DATA_DIR, 'config.backup.json')
 
-APP_VERSION = '3.3.0'
+APP_VERSION = '3.4.0'
 
 DEFAULTS = {
     # Recording
@@ -72,6 +73,7 @@ DEFAULTS = {
     'cloud_sync_clipboard': True,
     'cloud_sync_messages': True,
     'cloud_sync_interval_seconds': 30,
+    'auto_copy_remote_clipboard': False,
 
     # Theme
     'theme': 'dark',

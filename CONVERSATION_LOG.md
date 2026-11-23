@@ -51,3 +51,11 @@
 **Changes (v3.3.0):** new `textutil.clean_text` sanitiser applied to every event/clipboard text field; poison-row isolation fallback in `Database._flush_locked`; process-wide DB write lock; priority flood/overflow guards that never drop `key_press`/`shortcut`; WAL checkpoint before backup + max backups 5→3; data-safety counters in `/api/stats` + `/api/health` + dashboard Data Safety card; `/` focuses dashboard search; version 3.2.0 → 3.3.0.
 
 **Verified before deploy:** local tests - poison batch flushes 3/3 rows, 8 concurrent flush threads lose 0 of 53 events and produce 0 locked errors, `/api/health` + dashboard + static JS serve 200 with the new fields.
+
+
+## 2026-11-23 — v3.4.0 Full Reliability, Performance, Power & Cross-Device Overhaul
+
+- Fixed PyInstaller `--onefile` `_MEIPASS` temp-folder data wipe via `paths.py`, separating read-only bundled assets from persistent `%LOCALAPPDATA%\TypeKeep\data` with automatic safe migration of the live 512,123-event DB.
+- Fixed $O(N^2)$ typing-speed scan in `Database._compute_typing_speed()` (reduced 7-day reconstruction from >23.5s to ~1.6s).
+- Eliminated idle 4 Hz / 2 Hz wakeup loops across `Recorder`, `ClipboardMonitor`, and `_periodic()`, added Windows `BELOW_NORMAL_PRIORITY_CLASS`, fixed stuck modifier keys (`GetAsyncKeyState`), decoded Ctrl control characters, repaired notification watcher lifecycle, added live global macro hotkey triggering, and added word-boundary Ctrl editing reconstruction.
+- Overhauled Cloud & LAN sync (`_pull_messages`, persistent checkpoints, `auto_copy_remote_clipboard`, offline SVG QR pairing) and the mobile PWA / Companion app (hybrid LAN+Cloud mode, fixed 200-char card expansion truncation, Search/Filter, Quick Notes, Remote PC Macros).
